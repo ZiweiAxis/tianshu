@@ -51,11 +51,18 @@ def register_agent_by_human(
 
 
 def _notify_diting_init_permission(agent_id: str, owner_id: str) -> None:
-    """E4-S4：注册完成后通知谛听初始化权限。"""
+    """E4-S4：注册完成后通知谛听初始化权限；I-018：并调用谛听链上 DID 注册。"""
     import asyncio
     from src.diting_client.init_permission import notify_agent_registered
+    from src.diting_client.chain_did import register_did_on_chain
+
+    async def _notify_and_chain() -> None:
+        await notify_agent_registered(agent_id, owner_id)
+        await register_did_on_chain(agent_id, owner_id)
+
     try:
-        asyncio.run(notify_agent_registered(agent_id, owner_id))
+        asyncio.run(_notify_and_chain())
     except RuntimeError:
-        # 若已在事件循环中则异步投递
-        asyncio.get_event_loop().create_task(notify_agent_registered(agent_id, owner_id))
+        loop = asyncio.get_event_loop()
+        loop.create_task(notify_agent_registered(agent_id, owner_id))
+        loop.create_task(register_did_on_chain(agent_id, owner_id))

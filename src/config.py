@@ -24,6 +24,8 @@ DITING_APPROVE_CALLBACK_URL = os.getenv("DITING_APPROVE_CALLBACK_URL")
 DITING_INIT_PERMISSION_URL = os.getenv("DITING_INIT_PERMISSION_URL")
 # E9-S1：主 Agent 登记 Sub-agent 后可选通知谛听（POST 含 main_agent_id, sub_agent_id）
 DITING_SUB_AGENT_REGISTER_URL = os.getenv("DITING_SUB_AGENT_REGISTER_URL")
+# I-018：谛听链上 DID 接口基址（如 http://diting:8080/chain），用于注册/心跳调用 DID 注册与查询
+DITING_CHAIN_URL = os.getenv("DITING_CHAIN_URL")
 # E1-S3：无回复时推送给用户的反馈文案（可配置）
 FEEDBACK_NO_REPLY = os.getenv("FEEDBACK_NO_REPLY", "已触达，等待处理。若长时间无回复请重试或联系管理员。")
 

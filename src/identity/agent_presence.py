@@ -14,13 +14,38 @@ def agent_online_register(agent_id: str, status: str = "online") -> Dict[str, An
     """
     已注册 Agent 上线登记。自检已有天枢身份时调用；不重复走注册流程。
     若 agent_id 不存在则返回失败。
+    I-018：若配置了 DITING_CHAIN_URL，异步刷新链上 DID（不阻塞）。
     """
     from src.identity.agents import agent_exists
     if not agent_exists(agent_id):
         return {"ok": False, "error": "Agent 身份不存在，请先完成注册"}
     now = time.time()
     _presence[agent_id] = {"last_seen_ts": now, "status": status or "online"}
+    # I-018：上线时异步确保链上 DID 存在（注册时可能未配置或失败）
+    _fire_chain_did_register_if_configured(agent_id)
     return {"ok": True, "agent_id": agent_id, "status": _presence[agent_id]["status"]}
+
+
+def _fire_chain_did_register_if_configured(agent_id: str) -> None:
+    """若配置了 DITING_CHAIN_URL，在后台线程中调用链上 DID 注册（幂等），不阻塞。"""
+    import threading
+    from src.config import DITING_CHAIN_URL
+    from src.identity.relationships import get_agent_owner
+    if not (DITING_CHAIN_URL or "").strip():
+        return
+    owner_id = get_agent_owner(agent_id)
+    if not owner_id:
+        return
+
+    def _run() -> None:
+        import asyncio
+        from src.diting_client.chain_did import register_did_on_chain
+        try:
+            asyncio.run(register_did_on_chain(agent_id, owner_id))
+        except Exception:
+            pass  # 已打日志，不干扰上线结果
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 def agent_heartbeat(agent_id: str, status: Optional[str] = None) -> Dict[str, Any]:

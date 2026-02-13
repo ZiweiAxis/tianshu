@@ -77,15 +77,16 @@
 | 审批回调 | `DITING_APPROVE_CALLBACK_URL` | 天枢接收谛听/审批回调 |
 | 注册后初始化权限 | `DITING_INIT_PERMISSION_URL` | Agent 注册完成后通知谛听 |
 | Sub-agent 登记 | `DITING_SUB_AGENT_REGISTER_URL`（可选） | 主 Agent 登记 Sub-agent 后可选通知谛听 |
+| **I-018 链上 DID** | `DITING_CHAIN_URL` | 注册时 POST /chain/did/register；上线登记时异步刷新 DID（与谛听 I-017 联调） |
 
-### 4.2 规划中（技术方案与 diting I-016～I-018）
+### 4.2 已实现（I-018 对接谛听 DID）
 
-| 能力 | 接口约定 | 依赖 |
-|------|----------|------|
-| DID 链上注册/查询 | 谛听暴露 `POST /chain/did/register`、`GET /chain/did/{did}` | 谛听 I-016、I-017 |
-| 天枢调用 DID | 注册/心跳流程中调用谛听 DID 接口 | 天枢侧实现依赖谛听 I-017；diting I-018 |
+| 能力 | 接口约定 | 实现位置 |
+|------|----------|----------|
+| DID 链上注册/查询 | 谛听暴露 `POST /chain/did/register`、`GET /chain/did/{did}` | 谛听 I-017（diting） |
+| 天枢调用 DID | 注册流程调用 DID 注册；上线登记时异步刷新 | `src/diting_client/chain_did.py`、`human_initiated`、`agent_presence` |
 
-天枢在实现「注册/心跳调用链上 DID」时，需与谛听链 API 约定一致（URL、请求/响应格式），并可在 `tianshu/docs/` 或 `_bmad-output/` 中记录接口契约与 ADR。
+DID 命名：`did:ziwei:local:{agent_id}`；请求体与谛听 I-016 §3 一致（id、publicKey、environmentFingerprint、owner、status）。
 
 ---
 

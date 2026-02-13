@@ -1,0 +1,6 @@
+lark-oapi>=2.0.0       # 飞书 Stream SDK（长连接）
+matrix-nio>=0.20       # Matrix 长轮询客户端
+aiohttp>=3.8.0         # 异步 HTTP（用于上报谛听）
+python-dotenv>=1.0.0   # 环境变量管理
+psycopg2-binary>=2.9   # 可选：PostgreSQL 后端
+PyMySQL>=1.1           # 可选：MySQL 后端

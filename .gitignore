@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+.env
+
+# 日志
+logs/*.log
+
+# 本地数据库
+*.db
+*.sqlite3
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+.cursor/
+.codex/
+.claude/
+_bmad-output/
+_bmad/

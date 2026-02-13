@@ -1,0 +1,58 @@
+# E11-S2：编排一键启动（podman-compose up / docker-compose up）
+# 首次启动：Synapse 自动生成配置；天枢连 Synapse 需在 Synapse 中注册用户并配置 MATRIX_GATEWAY_USER / MATRIX_GATEWAY_TOKEN（见 docs/deploy.md）
+
+services:
+  tianshu:
+    build:
+      context: .
+      dockerfile: Containerfile
+    ports:
+      - "8080:8080"   # HEALTH_PORT
+    environment:
+      - MATRIX_HOMESERVER=http://synapse:8008
+      - MATRIX_GATEWAY_USER=${MATRIX_GATEWAY_USER:-@gateway:matrix.local}
+      - MATRIX_GATEWAY_TOKEN=${MATRIX_GATEWAY_TOKEN}
+      - FEISHU_APP_ID=${FEISHU_APP_ID}
+      - FEISHU_APP_SECRET=${FEISHU_APP_SECRET}
+      - HEALTH_PORT=8080
+      - DITING_INIT_PERMISSION_URL=${DITING_INIT_PERMISSION_URL:-}
+      - DITING_APPROVE_CALLBACK_URL=${DITING_APPROVE_CALLBACK_URL:-}
+    env_file:
+      - .env
+    depends_on:
+      synapse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  synapse:
+    image: matrixdotorg/synapse:v1.100.0
+    ports:
+      - "8008:8008"
+    environment:
+      SYNAPSE_SERVER_NAME: matrix.local
+      SYNAPSE_REPORT_STATS: "no"
+    volumes:
+      - synapse-data:/data
+    # 首次启动无配置时自动 generate，再 run
+    command: >
+      sh -c "
+        if [ ! -f /data/homeserver.yaml ]; then
+          echo 'Generating Synapse config...';
+          python -m synapse.app.homeserver generate
+        fi;
+        exec python -m synapse.app.homeserver run
+      "
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8008/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+volumes:
+  synapse-data:

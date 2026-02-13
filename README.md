@@ -84,6 +84,11 @@ python src/main.py
 
 （待补充）
 
+## 参考文档
+
+- **与主项目对齐**：`docs/design-alignment-with-ziwei.md`
+- **紫微技术方案**（主仓）：`ziwei/docs/open/technical/紫微智能体治理基础设施-技术方案.md`
+
 ## License
 
 （待定）

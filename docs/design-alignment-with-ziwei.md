@@ -52,11 +52,11 @@
 ### 3.1 目录
 
 - **天枢自有**：`tianshu/_bmad/`、`tianshu/_bmad-output/`（与「每子项目一 _bmad」一致）。
-- **根目录共享**：`ziwei/docs/` 下技术方案与架构图为跨子项目统一依据；规划时引用，不复制为天枢本地权威副本。
+- **根目录共享**：`ziwei/docs/open/technical/` 下技术方案与架构图为跨子项目统一依据；规划时引用，不复制为天枢本地权威副本。
 
 ### 3.2 工作流
 
-- **Phase 2 Planning**：若有新 Epic/大功能，PRD 或 epic 需与 `ziwei/docs/紫微智能体治理基础设施-技术方案.md` 中天枢职责与接口一致。
+- **Phase 2 Planning**：若有新 Epic/大功能，PRD 或 epic 需与 `ziwei/docs/open/technical/紫微智能体治理基础设施-技术方案.md` 中天枢职责与接口一致。
 - **Phase 3 Solutioning**：架构/ADR 需显式引用主项目技术方案与（若涉及）谛听 architecture；子项目级 ADR 放在 `tianshu/_bmad-output/planning-artifacts/` 或 `tianshu/docs/`。
 - **Phase 4 Implementation**：Story 与实现保持在 `ziwei/tianshu/` 内；跨子项目（如调用谛听 DID）在 Issue/Story 中注明依赖（如 diting I-017、I-018）。
 
@@ -92,7 +92,7 @@ DID 命名：`did:ziwei:local:{agent_id}`；请求体与谛听 I-016 §3 一致�
 
 ## 5. 天枢子 agent 使用本对齐文档的约定
 
-- **规划或架构讨论**：先阅读 `ziwei/docs/紫微智能体治理基础设施-技术方案.md` 第 2 节（天枢）及 3.6（私有链/谛听）；再阅读本文档。
+- **规划或架构讨论**：先阅读 `ziwei/docs/open/technical/紫微智能体治理基础设施-技术方案.md` 第 2 节（天枢）及 3.6（私有链/谛听）；再阅读本文档。
 - **与谛听联调或跨子项目 Story**：查阅 `ziwei/diting/ISSUE_LIST.md`（如 I-017、I-018）及谛听 `architecture.md` 中与天枢相关的接口与部署约定。
 - **BMAD 产出**：PRD/architecture/epics 中涉及身份、DID、链、审计、审批触达的部分，须与本文档及主项目技术方案一致；若有偏差，在 `_bmad-output/planning-artifacts/` 下用偏差/对齐文档记录并说明原因。
 

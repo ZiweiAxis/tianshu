@@ -7,13 +7,12 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 应用
+# 应用（入口在 src/main.py）
 COPY src ./src
-COPY main.py ./
 COPY .env.example .env.example
 
 # 健康探针默认端口（可被覆盖）
 ENV HEALTH_PORT=8080
 
-# 主进程：桥接 + 健康端点（同进程）；从项目根运行
-CMD ["python", "main.py"]
+# 主进程：桥接 + 健康端点（同进程）
+CMD ["python", "src/main.py"]

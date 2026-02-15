@@ -10,7 +10,7 @@
 
 | 文档 | 路径 | 用途 |
 |------|------|------|
-| 紫微智能体治理基础设施 技术方案 | `ziwei/docs/open/technical/紫微智能体治理基础设施-技术方案.md` | 总体架构、天枢/谛听/菩提职责、DID/链/接口约定 |
+| 紫微智能体治理基础设施 技术方案 | `ziwei/docs/open/technical/紫微智能体治理基础设施-技术方案.md` | 总体架构、天枢/谛听/太白职责、DID/链/接口约定 |
 | 紫微架构图 | `ziwei/docs/open/technical/紫微智能体治理基础设施-架构图.drawio` | 组件关系与边界 |
 | BMAD 多子项目管理最佳实践 | `ziwei/docs/open/technical/BMAD-多子项目管理-最佳实践.md` | 每子项目 _bmad、架构工作流、根目录共享文档 |
 | 谛听 BMAD 架构 | `ziwei/diting/_bmad-output/planning-artifacts/architecture.md` | 谛听组件边界、接口、与天枢集成时的约定 |

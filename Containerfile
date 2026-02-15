@@ -14,5 +14,5 @@ COPY .env.example .env.example
 # 健康探针默认端口（可被覆盖）
 ENV HEALTH_PORT=8080
 
-# 主进程：桥接 + 健康端点（同进程）
-CMD ["python", "src/main.py"]
+# 主进程（以模块方式运行，保证 src 包可被导入）
+CMD ["python", "-m", "src.main"]

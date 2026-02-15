@@ -19,7 +19,11 @@ docker compose up -d
 
 ## 首次使用：Matrix 网关用户与 Token
 
-天枢以「网关用户」身份连接 Synapse，需在 Synapse 中注册该用户并取得 access token：
+天枢以「网关用户」身份连接 Synapse，需在 Synapse 中存在该用户并持有 access token。
+
+**使用根目录一键启动时**（`ziwei` 仓库 `deploy/docker-compose.integration.yml`）：**无需填写 `MATRIX_GATEWAY_TOKEN`**。Compose 会传入 `REGISTRATION_SHARED_SECRET`，天枢启动时自动向 Synapse 注册 `@gateway:matrix.local` 并将 token 写入卷（如 `/data/gateway_token`），下次启动直接读取。仅当自举失败（如 Synapse 未就绪、secret 不一致）或网关用户已存在但 token 文件丢失时，才需按下列步骤手动处理。
+
+**仅部署天枢或接已有 Synapse 时**，需手动注册并配置 token：
 
 1. 等 Synapse 健康后再操作：
    ```bash

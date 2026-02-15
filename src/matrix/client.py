@@ -3,6 +3,7 @@
 
 import asyncio
 import logging
+import os
 from typing import Callable, Awaitable, Optional
 
 from nio import (
@@ -34,7 +35,8 @@ class MatrixClient:
     ):
         self._homeserver = homeserver or (MATRIX_HOMESERVER or "").rstrip("/")
         self._user_id = user_id or MATRIX_GATEWAY_USER or ""
-        self._access_token = access_token or MATRIX_GATEWAY_TOKEN
+        # 支持启动时自举写入的 token（config 在 import 时已读，此处再读一次 env）
+        self._access_token = access_token or MATRIX_GATEWAY_TOKEN or os.getenv("MATRIX_GATEWAY_TOKEN")
         self._on_disconnect = on_disconnect
         self._client: Optional[AsyncClient] = None
         self._sync_task: Optional[asyncio.Task] = None

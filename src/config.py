@@ -11,6 +11,12 @@ FEISHU_APP_SECRET = os.getenv("FEISHU_APP_SECRET")
 MATRIX_HOMESERVER = os.getenv("MATRIX_HOMESERVER")
 MATRIX_GATEWAY_USER = os.getenv("MATRIX_GATEWAY_USER")
 MATRIX_GATEWAY_TOKEN = os.getenv("MATRIX_GATEWAY_TOKEN")
+# 谛听 Matrix 账号
+DITING_MATRIX_TOKEN = os.getenv("DITING_MATRIX_TOKEN")
+# 审批用户 ID（发送审批请求的目标）
+APPROVAL_USER_ID = os.getenv("APPROVAL_USER_ID")
+# DM 映射文件路径
+DM_MAPPING_FILE = os.getenv("DM_MAPPING_FILE", "/data/dm_mapping.json")
 
 USE_PRIVATE_ROOM = os.getenv("USE_PRIVATE_ROOM", "false").lower() == "true"
 SHARED_ROOM_ID = os.getenv("SHARED_ROOM_ID")

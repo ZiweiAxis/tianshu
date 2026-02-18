@@ -275,12 +275,14 @@ def make_matrix_sync_callback(
     room_manager: Any,
     translator: Any,
     channel_adapter: Optional[Any] = None,
+    telegram_bridge: Optional[Any] = None,
 ) -> Callable[[str, str, Dict[str, Any]], Awaitable[None]]:
     """
     生成供 MatrixClient.start_sync_loop(on_event) 使用的回调：
-    收到投递类事件则消费并调渠道适配层+飞书 API；否则按 Matrix->飞书 消息转发。
+    收到投递类事件则消费并调渠道适配层+飞书/Telegram API；否则按 Matrix->飞书 消息转发。
     """
     from src.core.delivery import is_delivery_event
+    from src.bridge.telegram import handle_delivery_event as handle_telegram_delivery
 
     if channel_adapter is None:
         import src.channel_adapter as _adapter
@@ -288,7 +290,10 @@ def make_matrix_sync_callback(
 
     async def on_matrix_event(room_id: str, msgtype: str, content: Dict[str, Any]) -> None:
         if is_delivery_event(msgtype, content or {}):
+            # 处理投递事件：先尝试飞书，再尝试 Telegram
             await handle_delivery_event(room_id, msgtype, content or {}, feishu_bridge, channel_adapter)
+            if telegram_bridge:
+                await handle_telegram_delivery(room_id, msgtype, content or {}, telegram_bridge)
         else:
             await handle_matrix_event(room_id, msgtype, content or {}, feishu_bridge, room_manager, translator)
 

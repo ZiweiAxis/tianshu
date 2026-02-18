@@ -104,6 +104,8 @@ async def approval_request_handler(request: aiohttp.web.Request) -> aiohttp.web.
         }
     }
     返回: {"ok": true, "event_id": "xxx", "room_id": "xxx"}
+    
+    注意：此接口现在发送 Matrix MSC1767 原生卡片（m.card），支持交互按钮。
     """
     from src.config import APPROVAL_USER_ID, DITING_MATRIX_TOKEN, MATRIX_HOMESERVER
     
@@ -115,8 +117,6 @@ async def approval_request_handler(request: aiohttp.web.Request) -> aiohttp.web.
     target = body.get("target", {})
     payload = body.get("payload", {})
     
-    if not target:
-        return aiohttp.web.json_response({"ok": False, "error": "缺少 target"}, status=400)
     if not payload:
         return aiohttp.web.json_response({"ok": False, "error": "缺少 payload"}, status=400)
     
@@ -136,14 +136,30 @@ async def approval_request_handler(request: aiohttp.web.Request) -> aiohttp.web.
         return aiohttp.web.json_response({"ok": False, "error": "Matrix 连接失败"}, status=500)
     
     try:
-        # 发送审批请求（使用 DM 复用）
-        event_id = await matrix.send_delivery_with_token(
+        # 卡片 ID（使用 request_id 或生成）
+        card_id = payload.get("request_id") or payload.get("cheq_id")
+        
+        # 构造符合太白协议格式的 payload
+        # 协议格式要求包含 metadata 和 actions
+        card_payload = {
+            "title": payload.get("title", "审批请求"),
+            "content": payload.get("description", payload.get("content", "")),
+            "metadata": {
+                "cheq_id": payload.get("request_id") or payload.get("cheq_id", ""),
+                "agent_did": payload.get("source_agent_id"),
+                "operation": payload.get("operation"),
+                "risk_level": payload.get("risk_level"),
+            },
+            "expires_at": payload.get("expires_at"),
+        }
+        
+        # 发送 Matrix 原生卡片消息（支持交互按钮）
+        event_id = await matrix.send_card_with_token(
             user_id=approval_user_id,
             semantic_type="approval_request",
-            target=target,
-            payload=payload,
+            payload=card_payload,
             access_token=access_token,
-            body_summary=payload.get("title") or "审批请求",
+            card_id=card_id,
         )
         
         if event_id:
@@ -179,6 +195,9 @@ async def approval_request_handler(request: aiohttp.web.Request) -> aiohttp.web.
 
 async def run_health_server(port: int) -> aiohttp.web.AppRunner:
     """在后台提供 /health、/ready 与 Agent 发现端点。"""
+    from src.bridge.telegram import TelegramBridge
+    from src.config import TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET
+    
     app = aiohttp.web.Application()
     app.router.add_get("/health", health)
     app.router.add_get("/ready", ready)
@@ -187,6 +206,34 @@ async def run_health_server(port: int) -> aiohttp.web.AppRunner:
     app.router.add_post("/api/v1/agents/register", agents_register_handler)
     app.router.add_post("/api/v1/agents/heartbeat", agents_heartbeat_handler)
     app.router.add_post("/api/v1/delivery/approval-request", approval_request_handler)
+    
+    # Telegram Webhook 端点
+    if TELEGRAM_BOT_TOKEN:
+        telegram_bridge = TelegramBridge()
+        
+        async def telegram_webhook(request: aiohttp.web.Request) -> aiohttp.web.Response:
+            # 验证 secret token
+            secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+            if not telegram_bridge.verify_secret(secret):
+                return aiohttp.web.Response(status=403, text="Forbidden")
+            
+            try:
+                payload = await request.json()
+            except Exception:
+                return aiohttp.web.Response(status=400, text="Bad Request")
+            
+            # 处理 Telegram 事件
+            from src.bridge.telegram import handle_telegram_event
+            matrix = MatrixClient()
+            if await matrix.connect():
+                await handle_telegram_event(payload, matrix, room_manager)
+                await matrix.disconnect()
+            
+            return aiohttp.web.Response(text="OK")
+        
+        app.router.add_post("/webhook/telegram", telegram_webhook)
+        logger.info("Telegram Webhook 已注册 /webhook/telegram")
+    
     runner = aiohttp.web.AppRunner(app)
     await runner.setup()
     site = aiohttp.web.TCPSite(runner, "0.0.0.0", port)
@@ -196,23 +243,39 @@ async def run_health_server(port: int) -> aiohttp.web.AppRunner:
 
 
 async def run_bridge():
-    """连接 Matrix，启动 sync 循环，将 Matrix 事件转发到飞书。"""
+    """连接 Matrix，启动 sync 循环，将 Matrix 事件转发到飞书和 Telegram。"""
+    from src.bridge.feishu import FeishuBridge, make_matrix_sync_callback
+    from src.bridge.telegram import TelegramBridge
+    
     matrix = MatrixClient()
     feishu = FeishuBridge()
+    telegram = TelegramBridge()
+    
     if not feishu.is_configured:
         logger.warning("飞书未配置，Matrix -> 飞书 将不可用")
-    on_event = make_matrix_sync_callback(feishu, room_manager, translator)
+    if not telegram.is_configured:
+        logger.warning("Telegram 未配置，Matrix -> Telegram 将不可用")
+    
+    on_event = make_matrix_sync_callback(feishu, room_manager, translator, telegram_bridge=telegram)
     if not await matrix.connect():
         logger.error("Matrix 连接失败，退出")
         return
     set_matrix_ready(True)
     matrix.start_sync_loop(on_event)
+    
+    # 启动 @diting 审批监听器（监听审批回复）
+    from src.diting_listener import start_diting_listener
+    if not await start_diting_listener():
+        logger.warning("DitingApprovalListener 启动失败，审批回复功能将不可用")
+    
     try:
         await asyncio.Event().wait()
     except asyncio.CancelledError:
         pass
     finally:
         set_matrix_ready(False)
+        from src.diting_listener import stop_diting_listener
+        await stop_diting_listener()
     await matrix.disconnect()
 
 

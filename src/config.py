@@ -37,3 +37,8 @@ FEEDBACK_NO_REPLY = os.getenv("FEEDBACK_NO_REPLY", "已触达，等待处理。�
 
 # E11-S3：健康与就绪探针 HTTP 端口
 HEALTH_PORT = int(os.getenv("HEALTH_PORT", "8080"))
+
+# ---------- Telegram ----------
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET")
+TELEGRAM_WEBHOOK_URL = os.getenv("TELEGRAM_WEBHOOK_URL")

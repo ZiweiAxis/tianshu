@@ -241,3 +241,157 @@ class MatrixClient:
             rid: {"room_id": rid, "name": getattr(r, "name", None)}
             for rid, r in self._client.rooms.items()
         }
+
+    # ========== DM 复用功能 ==========
+    # 使用指定 token 创建/查找 DM，支持复用已有 DM room
+
+    async def create_dm_with_token(
+        self,
+        user_id: str,
+        access_token: str,
+    ) -> Optional[str]:
+        """使用指定 token 创建 DM，返回 room_id；失败返回 None。"""
+        if not self._client:
+            return None
+        try:
+            # 使用 admin API 或直接通过 _matrix/client/r0/createRoom 创建 DM
+            # DM 通过 invite 目标用户并设置 is_direct 来创建
+            resp = await self._client.room_create(
+                name=f"DM with {user_id}",
+                invite=[user_id],
+                is_direct=True,
+            )
+            if hasattr(resp, "room_id"):
+                return resp.room_id
+            if isinstance(resp, RoomCreateError):
+                logger.error("创建 DM 失败: %s", resp.message)
+            return None
+        except Exception as e:
+            logger.exception("创建 DM 异常: %s", e)
+            return None
+
+    async def find_dm_room_with_token(
+        self,
+        user_id: str,
+        access_token: str,
+    ) -> Optional[str]:
+        """
+        使用指定 token 查找与用户的已有 DM room。
+        通过遍历已加入的房间，检查是否有且仅有两个成员且包含目标用户。
+        """
+        if not self._client:
+            return None
+        try:
+            # 遍历已加入的房间
+            for room_id, room in (self._client.rooms or {}).items():
+                # 检查成员数量为 2（自己 + 目标用户）
+                if hasattr(room, 'members') and room.members:
+                    members = list(room.members.keys())
+                    if len(members) == 2 and user_id in members:
+                        # 这是目标用户的 DM
+                        return room_id
+            return None
+        except Exception as e:
+            logger.exception("查找 DM 异常: %s", e)
+            return None
+
+    async def send_delivery_with_token(
+        self,
+        user_id: str,
+        semantic_type: str,
+        target: dict,
+        payload: dict,
+        access_token: str,
+        body_summary: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        使用指定 token 发送投递消息（用于审批请求等）。
+        支持 DM 复用：如果已存在 DM room，直接使用；否则创建新的。
+        返回 event_id，失败返回 None。
+        """
+        import json
+        from src.config import DM_MAPPING_FILE
+        from src.core.delivery import build_delivery_content
+
+        # 先尝试从映射文件查找已有 DM
+        room_id = None
+        mapping = {}
+        
+        # 读取映射文件
+        try:
+            if os.path.exists(DM_MAPPING_FILE):
+                with open(DM_MAPPING_FILE, "r") as f:
+                    mapping = json.load(f)
+        except Exception as e:
+            logger.warning("读取 DM 映射文件失败: %s", e)
+        
+        # 查找已有的 DM room
+        room_id = mapping.get(user_id)
+        if room_id:
+            logger.info("找到已有 DM room: %s -> %s", user_id[:20], room_id)
+        
+        # 如果没有找到，尝试创建或查找 DM
+        if not room_id:
+            # 先尝试查找已有 DM
+            room_id = await self.find_dm_room_with_token(user_id, access_token)
+            if room_id:
+                logger.info("找到已有 DM: %s -> %s", user_id[:20], room_id)
+        
+        if not room_id:
+            # 创建新的 DM
+            room_id = await self.create_dm_with_token(user_id, access_token)
+            if room_id:
+                logger.info("创建新 DM: %s -> %s", user_id[:20], room_id)
+        
+        if not room_id:
+            logger.error("无法创建或找到 DM: %s", user_id[:20])
+            return None
+        
+        # 保存映射关系
+        mapping[user_id] = room_id
+        try:
+            os.makedirs(os.path.dirname(DM_MAPPING_FILE), exist_ok=True)
+            with open(DM_MAPPING_FILE, "w") as f:
+                json.dump(mapping, f)
+            logger.info("已保存 DM 映射: %s -> %s", user_id[:20], room_id)
+        except Exception as e:
+            logger.warning("保存 DM 映射失败: %s", e)
+        
+        # 发送投递消息（需要使用正确的 client 或通过 HTTP API）
+        # 这里通过 nio 客户端发送（需要切换到对应 token 的客户端）
+        # 由于 nio 客户端只能用一个 token，我们使用 HTTP API 直接发送
+        return await self._send_delivery_via_http(room_id, semantic_type, target, payload, access_token, body_summary)
+
+    async def _send_delivery_via_http(
+        self,
+        room_id: str,
+        semantic_type: str,
+        target: dict,
+        payload: dict,
+        access_token: str,
+        body_summary: Optional[str] = None,
+    ) -> Optional[str]:
+        """通过 HTTP API 发送投递消息（支持不同 token）。"""
+        import aiohttp
+        from src.core.delivery import build_delivery_content
+        
+        content = build_delivery_content(semantic_type, target, payload, body_summary)
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                headers = {"Authorization": f"Bearer {access_token}"}
+                txn_id = f"tianshu_{int(asyncio.get_event_loop().time() * 1000)}"
+                url = f"{self._homeserver}/_matrix/client/r0/rooms/{room_id}/send/m.room.message/{txn_id}"
+                async with session.put(url, headers=headers, json=content) as resp:
+                    if resp.status < 300:
+                        data = await resp.json()
+                        event_id = data.get("event_id")
+                        logger.info("发送投递消息成功: room=%s event=%s", room_id, event_id[:16] if event_id else "N/A")
+                        return event_id
+                    else:
+                        text = await resp.text()
+                        logger.error("发送投递消息失败: %s %s", resp.status, text[:200])
+                        return None
+        except Exception as e:
+            logger.exception("发送投递消息异常: %s", e)
+            return None

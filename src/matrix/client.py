@@ -251,21 +251,28 @@ class MatrixClient:
         access_token: str,
     ) -> Optional[str]:
         """使用指定 token 创建 DM，返回 room_id；失败返回 None。"""
-        if not self._client:
-            return None
+        import aiohttp
         try:
-            # 使用 admin API 或直接通过 _matrix/client/r0/createRoom 创建 DM
-            # DM 通过 invite 目标用户并设置 is_direct 来创建
-            resp = await self._client.room_create(
-                name=f"DM with {user_id}",
-                invite=[user_id],
-                is_direct=True,
-            )
-            if hasattr(resp, "room_id"):
-                return resp.room_id
-            if isinstance(resp, RoomCreateError):
-                logger.error("创建 DM 失败: %s", resp.message)
-            return None
+            # 使用 HTTP API 直接创建 DM，确保创建者就是使用 access_token 的用户
+            async with aiohttp.ClientSession() as session:
+                headers = {"Authorization": f"Bearer {access_token}"}
+                url = f"{self._homeserver}/_matrix/client/r0/createRoom"
+                content = {
+                    "invite": [user_id],
+                    "is_direct": True,
+                    "name": f"DM with {user_id}",
+                }
+                async with session.post(url, headers=headers, json=content) as resp:
+                    if resp.status < 300:
+                        data = await resp.json()
+                        room_id = data.get("room_id")
+                        if room_id:
+                            logger.info("使用 token 创建 DM 成功: %s -> %s", user_id[:20], room_id)
+                        return room_id
+                    else:
+                        text = await resp.text()
+                        logger.error("创建 DM 失败: %s %s", resp.status, text[:200])
+                        return None
         except Exception as e:
             logger.exception("创建 DM 异常: %s", e)
             return None
@@ -279,10 +286,11 @@ class MatrixClient:
         使用指定 token 查找与用户的已有 DM room。
         通过遍历已加入的房间，检查是否有且仅有两个成员且包含目标用户。
         """
+        import aiohttp
         if not self._client:
             return None
         try:
-            # 遍历已加入的房间
+            # 先尝试通过客户端的 rooms 缓存查找
             for room_id, room in (self._client.rooms or {}).items():
                 # 检查成员数量为 2（自己 + 目标用户）
                 if hasattr(room, 'members') and room.members:
@@ -290,6 +298,31 @@ class MatrixClient:
                     if len(members) == 2 and user_id in members:
                         # 这是目标用户的 DM
                         return room_id
+            
+            # 如果缓存中没有，通过 HTTP API 查询
+            async with aiohttp.ClientSession() as session:
+                headers = {"Authorization": f"Bearer {access_token}"}
+                # 获取已加入的房间列表
+                url = f"{self._homeserver}/_matrix/client/r0/joined_rooms"
+                async with session.get(url, headers=headers) as resp:
+                    if resp.status != 200:
+                        return None
+                    data = await resp.json()
+                    joined_rooms = data.get("joined_rooms", [])
+                    
+                    for room_id in joined_rooms:
+                        # 获取房间成员
+                        import urllib.parse
+                        encoded_room_id = urllib.parse.quote(room_id, safe='')
+                        members_url = f"{self._homeserver}/_matrix/client/r0/rooms/{encoded_room_id}/members"
+                        async with session.get(members_url, headers=headers) as members_resp:
+                            if members_resp.status != 200:
+                                continue
+                            members_data = await members_resp.json()
+                            members_list = members_data.get("chunk", [])
+                            members = [m.get("state_key") for m in members_list]
+                            if len(members) == 2 and user_id in members:
+                                return room_id
             return None
         except Exception as e:
             logger.exception("查找 DM 异常: %s", e)
@@ -381,7 +414,10 @@ class MatrixClient:
             async with aiohttp.ClientSession() as session:
                 headers = {"Authorization": f"Bearer {access_token}"}
                 txn_id = f"tianshu_{int(asyncio.get_event_loop().time() * 1000)}"
-                url = f"{self._homeserver}/_matrix/client/r0/rooms/{room_id}/send/m.room.message/{txn_id}"
+                # URL-encode the room_id (contains ! which is special in URLs)
+                import urllib.parse
+                encoded_room_id = urllib.parse.quote(room_id, safe='')
+                url = f"{self._homeserver}/_matrix/client/r0/rooms/{encoded_room_id}/send/m.room.message/{txn_id}"
                 async with session.put(url, headers=headers, json=content) as resp:
                     if resp.status < 300:
                         data = await resp.json()

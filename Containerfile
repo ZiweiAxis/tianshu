@@ -11,6 +11,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY src ./src
 COPY .env.example .env.example
 
+# 创建数据目录用于 DM 映射
+RUN mkdir -p /data
+
 # 健康探针默认端口（可被覆盖）
 ENV HEALTH_PORT=8080
 

@@ -216,6 +216,32 @@ class MatrixClient:
         content = build_delivery_content(semantic_type, target, payload, body_summary)
         return await self._send_custom(room_id, content)
 
+    async def send_card(
+        self,
+        room_id: str,
+        semantic_type: str,
+        payload: dict,
+        card_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        发送 Matrix MSC1767 原生卡片消息。
+        
+        用于审批请求等需要交互按钮的场景。
+        
+        Args:
+            room_id: 目标房间 ID
+            semantic_type: 语义类型（如 approval_request, approval_result）
+            payload: 业务数据
+            card_id: 卡片唯一标识（用于回调关联）
+        
+        Returns:
+            event_id，失败返回 None
+        """
+        from src.core.delivery import build_matrix_card_content
+
+        content = build_matrix_card_content(semantic_type, payload, card_id)
+        return await self._send_custom(room_id, content)
+
     async def _send_custom(self, room_id: str, content: dict) -> Optional[str]:
         """发送自定义 content 的 m.room.message。"""
         if not self._client:
@@ -430,4 +456,100 @@ class MatrixClient:
                         return None
         except Exception as e:
             logger.exception("发送投递消息异常: %s", e)
+            return None
+
+    async def send_card_with_token(
+        self,
+        user_id: str,
+        semantic_type: str,
+        payload: dict,
+        access_token: str,
+        card_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        使用指定 token 发送 Matrix MSC1767 原生卡片消息（用于审批请求等）。
+        
+        支持 DM 复用：如果已存在 DM room，直接使用；否则创建新的。
+        
+        Args:
+            user_id: 接收方用户 ID
+            semantic_type: 语义类型（如 approval_request, approval_result）
+            payload: 业务数据
+            access_token: Matrix 访问令牌
+            card_id: 卡片唯一标识（用于回调关联）
+        
+        Returns:
+            event_id，失败返回 None
+        """
+        import json
+        import aiohttp
+        import urllib.parse
+        from src.config import DM_MAPPING_FILE
+        from src.core.delivery import build_matrix_card_content
+
+        # 先尝试从映射文件查找已有 DM
+        room_id = None
+        mapping = {}
+        
+        # 读取映射文件
+        try:
+            if os.path.exists(DM_MAPPING_FILE):
+                with open(DM_MAPPING_FILE, "r") as f:
+                    mapping = json.load(f)
+        except Exception as e:
+            logger.warning("读取 DM 映射文件失败: %s", e)
+        
+        # 查找已有的 DM room
+        room_id = mapping.get(user_id)
+        if room_id:
+            logger.info("找到已有 DM room: %s -> %s", user_id[:20], room_id)
+        
+        # 如果没有找到，尝试创建或查找 DM
+        if not room_id:
+            room_id = await self.find_dm_room_with_token(user_id, access_token)
+            if room_id:
+                logger.info("找到已有 DM: %s -> %s", user_id[:20], room_id)
+        
+        if not room_id:
+            room_id = await self.create_dm_with_token(user_id, access_token)
+            if room_id:
+                logger.info("创建新 DM: %s -> %s", user_id[:20], room_id)
+        
+        if not room_id:
+            logger.error("无法创建或找到 DM: %s", user_id[:20])
+            return None
+        
+        # 保存映射关系
+        mapping[user_id] = room_id
+        try:
+            os.makedirs(os.path.dirname(DM_MAPPING_FILE), exist_ok=True)
+            with open(DM_MAPPING_FILE, "w") as f:
+                json.dump(mapping, f)
+            logger.info("已保存 DM 映射: %s -> %s", user_id[:20], room_id)
+        except Exception as e:
+            logger.warning("保存 DM 映射失败: %s", e)
+        
+        # 构建卡片内容
+        content = build_matrix_card_content(semantic_type, payload, card_id)
+        
+        # 通过 HTTP API 发送
+        try:
+            async with aiohttp.ClientSession() as session:
+                headers = {"Authorization": f"Bearer {access_token}"}
+                txn_id = f"tianshu_card_{int(asyncio.get_event_loop().time() * 1000)}"
+                encoded_room_id = urllib.parse.quote(room_id, safe='')
+                url = f"{self._homeserver}/_matrix/client/r0/rooms/{encoded_room_id}/send/m.room.message/{txn_id}"
+                async with session.put(url, headers=headers, json=content) as resp:
+                    if resp.status < 300:
+                        data = await resp.json()
+                        event_id = data.get("event_id")
+                        logger.info("发送卡片消息成功: room=%s event=%s semantic_type=%s", 
+                                   room_id, event_id[:16] if event_id else "N/A", semantic_type)
+                        return event_id
+                    else:
+                        text = await resp.text()
+                        logger.error("发送卡片消息失败: %s %s", resp.status, text[:200])
+                        return None
+        except Exception as e:
+            logger.exception("发送卡片消息异常: %s", e)
             return None

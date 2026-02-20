@@ -50,10 +50,15 @@ class TelegramConverter:
         # 处理其他更新类型
         return {"msgtype": "unknown", "body": "", "raw": update}
 
-    def _parse_message(self, msg: Dict[str, Any], edited: bool = False) -> Dict[str, Any]:
+    def _parse_message(self, msg: Dict[str, Any], edited: bool = False, is_channel: bool = False) -> Dict[str, Any]:
         """解析普通 Telegram 消息。"""
         chat = msg.get("chat", {})
         user = msg.get("from", {})
+        
+        # 识别聊天类型
+        chat_type = chat.get("type", "private")
+        is_group = chat_type in ("group", "supergroup")
+        is_channel = is_channel or chat_type == "channel"
         
         # 基础消息结构
         internal = {
@@ -65,11 +70,13 @@ class TelegramConverter:
             },
             "chat": {
                 "id": str(chat.get("id", "")),
-                "type": chat.get("type", "private"),
+                "type": chat_type,
             },
             "message_id": msg.get("message_id"),
             "date": msg.get("date"),
             "edited": edited,
+            "is_group": is_group,
+            "is_channel": is_channel,
             "raw": msg,
         }
         
@@ -140,12 +147,52 @@ class TelegramConverter:
             }
         
         # 处理命令
+        command = None
+        command_args = []
+        mentions = []
+        
         if "entities" in msg:
             entities = msg["entities"]
+            text = msg.get("text", "")
             for ent in entities:
-                if ent.get("type") == "bot_command":
+                ent_type = ent.get("type")
+                if ent_type == "bot_command":
                     internal["msgtype"] = "command"
-                    break
+                    # 解析命令和参数
+                    offset = ent.get("offset", 0)
+                    length = ent.get("length", 0)
+                    if text and offset < len(text):
+                        cmd_text = text[offset:offset + length]
+                        if "/" in cmd_text:
+                            parts = cmd_text[1:].split("@", 1)  # /start@botname
+                            command = parts[0]
+                            if len(parts) > 1:
+                                command_args = [parts[1]]
+                elif ent_type == "mention":
+                    # @mention - 用户名
+                    offset = ent.get("offset", 0)
+                    length = ent.get("length", 0)
+                    if text and offset < len(text):
+                        mention_name = text[offset:offset + length]
+                        mentions.append({"type": "username", "name": mention_name})
+                elif ent_type == "text_mention":
+                    # 带有用户 ID 的 mention
+                    mentioned_user = ent.get("user", {})
+                    if mentioned_user.get("id"):
+                        mentions.append({
+                            "type": "user_id",
+                            "id": str(mentioned_user.get("id")),
+                            "name": self._get_user_name(mentioned_user),
+                        })
+        
+        # 如果检测到命令，添加命令信息
+        if command:
+            internal["command"] = command
+            internal["command_args"] = command_args
+        
+        # 添加 @mention 信息
+        if mentions:
+            internal["mentions"] = mentions
         
         return internal
 

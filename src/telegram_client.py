@@ -29,6 +29,15 @@ class TelegramMessage:
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     username: Optional[str] = None
+    # 群组/频道扩展字段
+    chat_type: Optional[str] = None  # "private", "group", "supergroup", "channel"
+    is_group: bool = False
+    is_channel: bool = False
+    is_command: bool = False
+    command: Optional[str] = None
+    command_args: Optional[List[str]] = None
+    reply_to_message: Optional[Dict[str, Any]] = None
+    mentions: List[int] = field(default_factory=list)  # 被 @ 的用户 ID
     raw: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -49,11 +58,31 @@ class TelegramUpdate:
     update_id: int
     message: Optional[TelegramMessage] = None
     callback_query: Optional[TelegramCallbackQuery] = None
+    channel_post: Optional[TelegramMessage] = None  # 频道消息
+    edited_message: Optional[TelegramMessage] = None
     raw: Dict[str, Any] = field(default_factory=dict)
+    
+    @property
+    def is_group_message(self) -> bool:
+        """是否群组消息"""
+        msg = self.message
+        return msg is not None and msg.is_group
+    
+    @property
+    def is_channel_message(self) -> bool:
+        """是否频道消息"""
+        msg = self.channel_post or self.message
+        return msg is not None and msg.is_channel
+    
+    @property
+    def is_command(self) -> bool:
+        """是否命令消息"""
+        msg = self.message
+        return msg is not None and msg.is_command
     
     def to_internal_message(self) -> Dict[str, Any]:
         """转换为天枢内部消息格式"""
-        msg = self.message
+        msg = self.message or self.channel_post
         if msg:
             return {
                 "platform": "telegram",
@@ -62,6 +91,12 @@ class TelegramUpdate:
                 "message_id": msg.message_id,
                 "text": msg.text,
                 "timestamp": msg.date.isoformat() if msg.date else None,
+                "chat_type": msg.chat_type,
+                "is_group": msg.is_group,
+                "is_channel": msg.is_channel,
+                "is_command": msg.is_command,
+                "command": msg.command,
+                "command_args": msg.command_args,
                 "sender": {
                     "first_name": msg.first_name,
                     "last_name": msg.last_name,
@@ -171,12 +206,12 @@ class TelegramClient:
             logger.exception("Telegram 请求异常: %s", e)
             return {"ok": False, "error": str(e)}
 
-    def _parse_message(self, data: Dict[str, Any]) -> Optional[TelegramMessage]:
+    def _parse_message(self, data: Dict[str, Any], is_channel: bool = False) -> Optional[TelegramMessage]:
         """解析消息对象"""
         if not data:
             return None
         
-        message = data.get("message", {})
+        message = data.get("message", {}) or data
         if not message:
             return None
         
@@ -191,6 +226,58 @@ class TelegramClient:
             except (ValueError, OSError):
                 pass
         
+        # 识别聊天类型
+        chat_type = chat.get("type", "private")
+        is_group = chat_type in ("group", "supergroup")
+        is_channel = is_channel or chat_type == "channel"
+        
+        # 解析命令和 @mention
+        command = None
+        command_args = []
+        is_command = False
+        mentions = []
+        
+        text = message.get("text", "")
+        entities = message.get("entities", [])
+        
+        for ent in entities:
+            ent_type = ent.get("type")
+            if ent_type == "bot_command":
+                is_command = True
+                # 解析命令和参数
+                offset = ent.get("offset", 0)
+                length = ent.get("length", 0)
+                if text and offset < len(text):
+                    cmd_text = text[offset:offset + length]
+                    if "/" in cmd_text:
+                        parts = cmd_text[1:].split("@", 1)  # /start@botname
+                        command = parts[0]
+                        if len(parts) > 1:
+                            command_args = [parts[1]]
+            elif ent_type == "mention":
+                # @mention - 获取用户名
+                offset = ent.get("offset", 0)
+                length = ent.get("length", 0)
+                # 这里只能获取到名字，user_id 需要额外查询
+            elif ent_type == "text_mention":
+                # 带有用户 ID 的 mention
+                mentioned_user = ent.get("user", {})
+                if mentioned_user.get("id"):
+                    mentions.append(mentioned_user["id"])
+        
+        # 检查消息文本是否以命令开头（fallback）
+        if text and text.startswith("/") and not is_command:
+            parts = text[1:].split(" ", 1)
+            cmd = parts[0].split("@")[0]
+            if cmd.isalpha() or cmd.isalnum():
+                is_command = True
+                command = cmd
+                if len(parts) > 1:
+                    command_args = parts[1].split()
+        
+        # 解析回复消息
+        reply_to_message = message.get("reply_to_message")
+        
         return TelegramMessage(
             message_id=message.get("message_id", 0),
             chat_id=chat.get("id", 0),
@@ -200,6 +287,14 @@ class TelegramClient:
             first_name=user.get("first_name"),
             last_name=user.get("last_name"),
             username=user.get("username"),
+            chat_type=chat_type,
+            is_group=is_group,
+            is_channel=is_channel,
+            is_command=is_command,
+            command=command,
+            command_args=command_args,
+            mentions=mentions,
+            reply_to_message=reply_to_message,
             raw=message,
         )
 
@@ -226,15 +321,34 @@ class TelegramClient:
 
     def _parse_update(self, data: Dict[str, Any]) -> TelegramUpdate:
         """解析 Update 对象"""
+        # 频道消息 (channel_post)
+        channel_post = None
+        if "channel_post" in data:
+            channel_post = self._parse_message(data, is_channel=True)
+        
+        # 编辑的消息 (edited_message)
+        edited_message = None
+        if "edited_message" in data:
+            edited_message = self._parse_message(data.get("edited_message", {}))
+        
+        # 新成员加入 (new_chat_members)
+        # 成员离开 (left_chat_member)
+        # 群组标题更改 (new_chat_title)
+        # 群组图片更改 (new_chat_photo)
+        # 群组删除 (group_chat_created, supergroup_chat_created, migrate_to_chat_id, migrate_from_chat_id)
+        
         return TelegramUpdate(
             update_id=data.get("update_id", 0),
             message=self._parse_message(data),
             callback_query=self._parse_callback_query(data),
+            channel_post=channel_post,
+            edited_message=edited_message,
             raw=data,
         )
 
     async def _handle_update(self, update: TelegramUpdate):
         """处理 Update 事件"""
+        # 处理普通消息
         if update.message:
             for handler in self._message_handlers:
                 try:
@@ -242,6 +356,29 @@ class TelegramClient:
                 except Exception as e:
                     logger.exception("消息处理器异常: %s", e)
         
+        # 处理频道消息
+        if update.channel_post:
+            for handler in self._message_handlers:
+                try:
+                    await handler(update)
+                except Exception as e:
+                    logger.exception("频道消息处理器异常: %s", e)
+        
+        # 处理编辑消息
+        if update.edited_message:
+            # 创建编辑消息的 Update 副本
+            edited_update = TelegramUpdate(
+                update_id=update.update_id,
+                message=update.edited_message,
+                raw=update.raw,
+            )
+            for handler in self._message_handlers:
+                try:
+                    await handler(edited_update)
+                except Exception as e:
+                    logger.exception("编辑消息处理器异常: %s", e)
+        
+        # 处理回调查询
         if update.callback_query:
             for handler in self._callback_handlers:
                 try:
@@ -266,10 +403,27 @@ class TelegramClient:
         Returns:
             更新列表
         """
+        if allowed_updates is None:
+            # 默认接收所有常见更新类型
+            allowed_updates = [
+                "message", 
+                "callback_query", 
+                "channel_post",
+                "edited_message",
+                "new_chat_members",
+                "left_chat_member",
+                "new_chat_title",
+                "new_chat_photo",
+                "group_chat_created",
+                "supergroup_chat_created",
+                "migrate_to_chat_id",
+                "migrate_from_chat_id",
+            ]
+        
         data = {
             "offset": self._offset,
             "timeout": timeout,
-            "allowed_updates": allowed_updates or ["message", "callback_query"],
+            "allowed_updates": allowed_updates,
         }
         
         result = await self._request("getUpdates", data, aiohttp.ClientTimeout(total=timeout + 10))
@@ -615,6 +769,279 @@ class TelegramClient:
         if result.get("ok"):
             return result.get("result", [])
         return []
+
+    async def get_chat_member_count(
+        self, 
+        chat_id: Union[int, str]
+    ) -> Optional[int]:
+        """获取群组成员数量"""
+        result = await self._request("getChatMemberCount", {"chat_id": str(chat_id)})
+        if result.get("ok"):
+            return result.get("result")
+        return None
+
+    async def get_chat_member(
+        self, 
+        chat_id: Union[int, str],
+        user_id: int,
+    ) -> Optional[Dict[str, Any]]:
+        """获取群组成员信息"""
+        result = await self._request("getChatMember", {
+            "chat_id": str(chat_id),
+            "user_id": user_id,
+        })
+        if result.get("ok"):
+            return result.get("result")
+        return None
+
+    async def is_bot_admin(
+        self, 
+        chat_id: Union[int, str]
+    ) -> bool:
+        """检查 Bot 是否为群管理员"""
+        me = await self.get_me()
+        if not me:
+            return False
+        
+        bot_user_id = me.get("id")
+        administrators = await self.get_chat_administrators(chat_id)
+        
+        for admin in administrators:
+            if admin.get("user", {}).get("id") == bot_user_id:
+                return True
+        return False
+
+    async def can_bot_send_messages(
+        self, 
+        chat_id: Union[int, str]
+    ) -> bool:
+        """检查 Bot 是否有发送消息的权限"""
+        me = await self.get_me()
+        if not me:
+            return False
+        
+        bot_user_id = me.get("id")
+        member = await self.get_chat_member(chat_id, bot_user_id)
+        
+        if not member:
+            return False
+        
+        # 检查成员状态
+        status = member.get("status")
+        if status in ("administrator", "creator"):
+            return True
+        
+        # 检查具体权限
+        if status == "member":
+            # 检查 can_send_messages 权限
+            return member.get("can_send_messages", True)
+        
+        return False
+
+    # ==================== 频道消息 ====================
+
+    async def send_channel_message(
+        self,
+        channel_id: Union[int, str],
+        text: str,
+        parse_mode: str = "Markdown",
+        reply_markup: Optional[Dict[str, Any]] = None,
+    ) -> Optional[int]:
+        """
+        发送频道消息
+        
+        Args:
+            channel_id: 频道 ID (格式: @channel_username 或 -1001234567890)
+            text: 消息文本
+            parse_mode: 解析模式
+            reply_markup: 回复键盘
+            
+        Returns:
+            发送成功的消息 ID
+        """
+        return await self.send_message(
+            chat_id=channel_id,
+            text=text,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+        )
+
+    async def forward_message(
+        self,
+        chat_id: Union[int, str],
+        from_chat_id: Union[int, str],
+        message_id: int,
+    ) -> Optional[int]:
+        """
+        转发消息
+        
+        Args:
+            chat_id: 目标聊天 ID
+            from_chat_id: 源聊天 ID
+            message_id: 源消息 ID
+            
+        Returns:
+            新消息 ID
+        """
+        data = {
+            "chat_id": str(chat_id),
+            "from_chat_id": str(from_chat_id),
+            "message_id": message_id,
+        }
+        result = await self._request("forwardMessage", data)
+        if result.get("ok"):
+            return result["result"]["message_id"]
+        return None
+
+    # ==================== 群组事件 ====================
+
+    def parse_chat_event(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        解析群组事件（成员加入/离开等）
+        
+        Args:
+            data: Telegram Update 原始数据
+            
+        Returns:
+            事件信息 dict，包含:
+            - event_type: "member_joined", "member_left", "title_changed", etc.
+            - chat_id: 群组 ID
+            - user_id: 触发事件的用户 ID
+            - user_name: 用户名称
+            - raw: 原始数据
+        """
+        event = None
+        
+        # 新成员加入
+        if "message" in data:
+            msg = data["message"]
+            chat = msg.get("chat", {})
+            
+            if "new_chat_members" in msg:
+                members = msg["new_chat_members"]
+                for user in members:
+                    event = {
+                        "event_type": "member_joined",
+                        "chat_id": chat.get("id"),
+                        "chat_type": chat.get("type"),
+                        "user_id": user.get("id"),
+                        "user_name": self._format_user_name(user),
+                        "user": user,
+                        "raw": msg,
+                    }
+            
+            # 成员离开
+            elif "left_chat_member" in msg:
+                user = msg["left_chat_member"]
+                event = {
+                    "event_type": "member_left",
+                    "chat_id": chat.get("id"),
+                    "chat_type": chat.get("type"),
+                    "user_id": user.get("id"),
+                    "user_name": self._format_user_name(user),
+                    "user": user,
+                    "raw": msg,
+                }
+            
+            # 群组标题更改
+            elif "new_chat_title" in msg:
+                event = {
+                    "event_type": "title_changed",
+                    "chat_id": chat.get("id"),
+                    "chat_type": chat.get("type"),
+                    "old_title": None,  # 需要对比
+                    "new_title": msg.get("new_chat_title"),
+                    "raw": msg,
+                }
+            
+            # 群组图片更改
+            elif "new_chat_photo" in msg:
+                event = {
+                    "event_type": "photo_changed",
+                    "chat_id": chat.get("id"),
+                    "chat_type": chat.get("type"),
+                    "raw": msg,
+                }
+            
+            # 群组创建
+            elif "group_chat_created" in msg:
+                event = {
+                    "event_type": "group_created",
+                    "chat_id": chat.get("id"),
+                    "chat_type": chat.get("type"),
+                    "raw": msg,
+                }
+            
+            elif "supergroup_chat_created" in msg:
+                event = {
+                    "event_type": "supergroup_created",
+                    "chat_id": chat.get("id"),
+                    "chat_type": chat.get("type"),
+                    "raw": msg,
+                }
+            
+            # 迁移
+            elif "migrate_to_chat_id" in msg:
+                event = {
+                    "event_type": "migrated_to_supergroup",
+                    "chat_id": chat.get("id"),
+                    "new_chat_id": msg.get("migrate_to_chat_id"),
+                    "raw": msg,
+                }
+            
+            elif "migrate_from_chat_id" in msg:
+                event = {
+                    "event_type": "migrated_from_group",
+                    "chat_id": msg.get("migrate_from_chat_id"),
+                    "new_chat_id": chat.get("id"),
+                    "raw": msg,
+                }
+        
+        return event
+
+    def _format_user_name(self, user: Dict[str, Any]) -> str:
+        """格式化用户名"""
+        if not user:
+            return "Unknown"
+        if user.get("username"):
+            return f"@{user['username']}"
+        name = ""
+        if user.get("first_name"):
+            name = user["first_name"]
+        if user.get("last_name"):
+            name += " " + user["last_name"]
+        return name or "Unknown"
+
+    # ==================== 命令处理 ====================
+
+    async def handle_command(
+        self,
+        update: TelegramUpdate,
+        commands: Dict[str, Callable],
+    ) -> Optional[Any]:
+        """
+        处理命令消息
+        
+        Args:
+            update: Telegram Update
+            commands: 命令字典 {"start": handler, "help": handler, ...}
+            
+        Returns:
+            处理结果
+        """
+        msg = update.message
+        if not msg or not msg.is_command:
+            return None
+        
+        command = msg.command
+        if command in commands:
+            handler = commands[command]
+            try:
+                return await handler(update, msg.command_args or [])
+            except Exception as e:
+                logger.exception(f"命令处理器异常 /{command}: {e}")
+        
+        return None
 
     # ==================== 工具方法 ====================
 

@@ -1,0 +1,31 @@
+# Telegram 审批 Bot 容器化构建
+# 用于 S021 - 持续运行的 Telegram Bot 服务
+# 
+# 构建: docker build -f Dockerfile.telegram_bot -t telegram-approval-bot .
+# 运行: docker run -d --name telegram-approval-bot -e TELEGRAM_APPROVAL_BOT_TOKEN=xxx telegram-approval-bot
+
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# 复制依赖文件
+COPY requirements.txt .
+
+# 安装依赖
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 复制源代码
+COPY src/telegram_bot.py /app/telegram_bot.py
+COPY src/telegram_client.py /app/telegram_client.py
+COPY src/config.py /app/config.py
+COPY .env.example /app/.env.example
+
+# 创建数据目录
+RUN mkdir -p /data
+
+# 环境变量（可在运行时覆盖）
+ENV HEALTH_PORT=8080
+ENV PYTHONUNBUFFERED=1
+
+# 启动命令
+CMD ["python", "telegram_bot.py"]

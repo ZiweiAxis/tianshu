@@ -277,27 +277,43 @@ class TelegramClient:
         method: str, 
         data: Optional[Dict[str, Any]] = None,
         timeout: Optional[aiohttp.ClientTimeout] = None,
+        retry: int = 3,
     ) -> Dict[str, Any]:
-        """发送 API 请求"""
+        """发送 API 请求，带重试机制"""
         url = f"{self.api_url}/{method}"
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    url, 
-                    json=data or {}, 
-                    timeout=timeout or self._timeout
-                ) as resp:
-                    result = await resp.json()
-                    if not result.get("ok"):
-                        logger.error("Telegram API 错误: %s", result)
-                        return {"ok": False, "error": result.get("description", "Unknown error")}
-                    return result
-        except asyncio.TimeoutError:
-            logger.error("Telegram 请求超时: %s", method)
-            return {"ok": False, "error": "Request timeout"}
-        except Exception as e:
-            logger.exception("Telegram 请求异常: %s", e)
-            return {"ok": False, "error": str(e)}
+        
+        for attempt in range(retry):
+            try:
+                async with aiohttp.ClientSession(trust_env=True) as session:
+                    async with session.post(
+                        url, 
+                        json=data or {}, 
+                        timeout=timeout or self._timeout
+                    ) as resp:
+                        result = await resp.json()
+                        if not result.get("ok"):
+                            # 限流错误，等待后重试
+                            if result.get("error_code") == 429:
+                                wait_time = int(result.get("parameters", {}).get("retry_after", 5))
+                                logger.warning(f"Telegram 限流，等待 {wait_time} 秒后重试...")
+                                await asyncio.sleep(wait_time)
+                                continue
+                            logger.error("Telegram API 错误: %s", result)
+                            return {"ok": False, "error": result.get("description", "Unknown error")}
+                        return result
+            except asyncio.TimeoutError:
+                logger.warning(f"Telegram 请求超时 (尝试 {attempt + 1}/{retry}): {method}")
+                if attempt < retry - 1:
+                    await asyncio.sleep(1)  # 等待后重试
+            except aiohttp.ClientConnectorError as e:
+                logger.warning(f"Telegram 连接错误 (尝试 {attempt + 1}/{retry}): {e}")
+                if attempt < retry - 1:
+                    await asyncio.sleep(2)  # 等待后重试
+            except Exception as e:
+                logger.exception("Telegram 请求异常: %s", e)
+                return {"ok": False, "error": str(e)}
+        
+        return {"ok": False, "error": f"请求失败，已重试 {retry} 次"}
 
     def _parse_message(self, data: Dict[str, Any], is_channel: bool = False) -> Optional[TelegramMessage]:
         """解析消息对象"""
@@ -539,12 +555,19 @@ class TelegramClient:
         return []
 
     async def _polling_loop(self):
-        """Long Polling 循环"""
+        """Long Polling 循环，带错误处理和退避"""
         logger.info("开始 Long Polling...")
+        
+        backoff = 1  # 初始等待秒数
+        max_backoff = 30  # 最大等待秒数
         
         while self._polling:
             try:
                 updates = await self.get_updates()
+                
+                # 成功获取更新，重置退避
+                if updates:
+                    backoff = 1
                 
                 for update_data in updates:
                     update = self._parse_update(update_data)
@@ -553,8 +576,10 @@ class TelegramClient:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.exception("Polling 异常: %s", e)
-                await asyncio.sleep(5)  # 等待后重试
+                logger.warning(f"Polling 异常: {e}, {backoff}秒后重试...")
+                await asyncio.sleep(backoff)
+                # 指数退避
+                backoff = min(backoff * 2, max_backoff)
         
         logger.info("Long Polling 已停止")
 

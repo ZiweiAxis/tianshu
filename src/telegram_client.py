@@ -272,6 +272,25 @@ class TelegramClient:
             logger.exception("处理审批回调异常: %s", e)
             return "⚠️ 处理异常"
 
+    async def _process_approval_async(self, query_id: str, callback_data: str) -> None:
+        """
+        异步处理审批回调
+        
+        Args:
+            query_id: 回调查询 ID
+            callback_data: 回调数据，格式: "approve:request_id" 或 "reject:request_id"
+        """
+        try:
+            # 调用处理逻辑获取结果
+            feedback = await self._handle_approval_callback(query_id, callback_data)
+            
+            # 可选：通过发送消息更新用户最终结果
+            # 注意：answer_callback_query 已经有响应，这里可以记录日志
+            logger.info("审批处理完成: query_id=%s, result=%s", query_id, feedback)
+            
+        except Exception as e:
+            logger.exception("异步审批处理异常: %s", e)
+
     async def _request(
         self, 
         method: str, 
@@ -494,8 +513,11 @@ class TelegramClient:
             
             # 自动处理审批回调（approve:xxx 或 reject:xxx）
             if callback_data and (callback_data.startswith("approve:") or callback_data.startswith("reject:")):
-                feedback = await self._handle_approval_callback(callback.id, callback_data)
-                await self.answer_callback_query(callback.id, feedback, show_alert=False)
+                # 1. 立即响应用户，不等待后续处理
+                await self.answer_callback_query(callback.id, "⏳ 处理中...", show_alert=False)
+                
+                # 2. 异步处理审批，不阻塞轮询循环
+                asyncio.create_task(self._process_approval_async(callback.id, callback_data))
             else:
                 # 处理其他回调
                 for handler in self._callback_handlers:

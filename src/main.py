@@ -207,32 +207,26 @@ async def run_health_server(port: int) -> aiohttp.web.AppRunner:
     app.router.add_post("/api/v1/agents/heartbeat", agents_heartbeat_handler)
     app.router.add_post("/api/v1/delivery/approval-request", approval_request_handler)
     
-    # Telegram Webhook 端点
+    # Telegram Webhook 端点（使用 telegram_webhook 模块）
     if TELEGRAM_BOT_TOKEN:
-        telegram_bridge = TelegramBridge()
+        from src.telegram_webhook import setup_webhook_in_app, create_bridge_handler
         
-        async def telegram_webhook(request: aiohttp.web.Request) -> aiohttp.web.Response:
-            # 验证 secret token
-            secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-            if not telegram_bridge.verify_secret(secret):
-                return aiohttp.web.Response(status=403, text="Forbidden")
-            
-            try:
-                payload = await request.json()
-            except Exception:
-                return aiohttp.web.Response(status=400, text="Bad Request")
-            
-            # 处理 Telegram 事件
+        async def _bridge_handler(data):
             from src.bridge.telegram import handle_telegram_event
             matrix = MatrixClient()
             if await matrix.connect():
-                await handle_telegram_event(payload, matrix, room_manager)
-                await matrix.disconnect()
-            
-            return aiohttp.web.Response(text="OK")
+                try:
+                    await handle_telegram_event(data, matrix, room_manager)
+                finally:
+                    await matrix.disconnect()
         
-        app.router.add_post("/webhook/telegram", telegram_webhook)
-        logger.info("Telegram Webhook 已注册 /webhook/telegram")
+        setup_webhook_in_app(
+            app,
+            token=TELEGRAM_BOT_TOKEN,
+            secret=TELEGRAM_WEBHOOK_SECRET,
+            handlers=[_bridge_handler],
+        )
+        logger.info("Telegram Webhook 已通过 telegram_webhook 模块注册")
     
     runner = aiohttp.web.AppRunner(app)
     await runner.setup()

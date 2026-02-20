@@ -526,6 +526,40 @@ class TelegramClient:
                     except Exception as e:
                         logger.exception("回调处理器异常: %s", e)
 
+    async def check_proxy_health(self) -> bool:
+        """
+        检查代理/Telegram 连接是否可用
+        
+        Returns:
+            连接是否可用
+        """
+        try:
+            me = await self.get_me()
+            return me is not None
+        except Exception as e:
+            logger.warning("代理健康检查失败: %s", e)
+            return False
+
+    async def _ensure_proxy_connection(self):
+        """
+        确保代理连接有效，如果不可用则尝试重新连接
+        
+        通过重置 offset 来触发新的连接尝试
+        """
+        logger.warning("代理不可用，尝试重新连接...")
+        
+        # 重置 offset 以确保获取最新的更新
+        self._offset = 0
+        
+        # 等待一小段时间后重试
+        await asyncio.sleep(2)
+        
+        # 再次检查
+        if await self.check_proxy_health():
+            logger.info("代理连接已恢复")
+        else:
+            logger.error("代理重连失败")
+
     # ==================== Long Polling ====================
     
     async def get_updates(
@@ -577,14 +611,24 @@ class TelegramClient:
         return []
 
     async def _polling_loop(self):
-        """Long Polling 循环，带错误处理和退避"""
+        """Long Polling 循环，带错误处理和退避，以及代理健康检查"""
         logger.info("开始 Long Polling...")
         
         backoff = 1  # 初始等待秒数
         max_backoff = 30  # 最大等待秒数
+        health_check_interval = 60  # 每60秒检查一次代理健康状态
+        last_health_check = 0
         
         while self._polling:
             try:
+                # 定期检查代理健康状态
+                current_time = asyncio.get_event_loop().time()
+                if current_time - last_health_check > health_check_interval:
+                    last_health_check = current_time
+                    if not await self.check_proxy_health():
+                        logger.warning("轮询中发现代理不可用，尝试重连...")
+                        await self._ensure_proxy_connection()
+                
                 updates = await self.get_updates()
                 
                 # 成功获取更新，重置退避

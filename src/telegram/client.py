@@ -3,6 +3,7 @@
 
 import json
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 import aiohttp
@@ -22,8 +23,9 @@ class TelegramClient:
     async def _request(self, method: str, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """发送 API 请求。"""
         url = f"{self.api_url}/{method}"
+        
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(trust_env=True) as session:
                 async with session.post(url, json=data or {}, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                     result = await resp.json()
                     if not result.get("ok"):

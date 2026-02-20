@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 TELEGRAM_API_URL = "https://api.telegram.org"
 
 # 獬豸审批 API 地址
-XIEZHI_API_BASE = os.getenv("XIEZHI_API_BASE", os.getenv("DITING_CHAIN_URL", "http://diting:8080/chain").replace("/chain", ""))
+XIEZHI_API_BASE = os.getenv("XIEZHI_API_BASE", os.getenv("DITING_CHAIN_URL", "http://localhost:8081/chain").replace("/chain", ""))
 
 
 @dataclass

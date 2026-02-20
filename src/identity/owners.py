@@ -122,3 +122,23 @@ def get_owner_channel(owner_id: str) -> Optional[Dict[str, Any]]:
     """获取 Owner 的飞书接收目标，无则返回 None。"""
     v = _store().get(BUCKET_OWNER_CHANNEL, owner_id)
     return dict(v) if v else None
+
+
+# Telegram 用户标识支持
+def register_telegram_owner(telegram_user_id: str) -> str:
+    """注册 Telegram 用户对应的 Owner"""
+    return register_owner("telegram_user_id", telegram_user_id)
+
+
+def lookup_telegram_owner(telegram_user_id: str) -> Optional[str]:
+    """查询 Telegram 用户对应的 Owner"""
+    results = lookup_owners("telegram_user_id", telegram_user_id)
+    return results[0]["owner_id"] if results else None
+
+
+def get_or_create_telegram_owner(telegram_user_id: str) -> str:
+    """获取或创建 Telegram 用户对应的 Owner"""
+    existing = lookup_telegram_owner(telegram_user_id)
+    if existing:
+        return existing
+    return register_telegram_owner(telegram_user_id)

@@ -1,0 +1,25 @@
+# Weather Skill 示例
+# 
+# 这是一个简单的天气查询 Skill 示例
+# 
+# 触发关键词: 天气, 天气预报, 查询天气
+# 参数: city (城市名称)
+
+name: weather
+description: 查询指定城市的天气信息
+version: 1.0.0
+triggers:
+  - keywords:
+      - 天气
+      - 天气预报
+      - 查询天气
+      - 气温
+parameters:
+  - name: city
+    type: string
+    required: true
+    description: 要查询的城市名称
+execution:
+  type: script
+  entry: scripts/execute.py
+  timeout: 10

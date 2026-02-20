@@ -72,6 +72,7 @@ class WukongClient:
         message: str,
         system_prompt: Optional[str] = None,
         max_tokens: Optional[int] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
         """
         发送消息并获取回复
@@ -80,6 +81,7 @@ class WukongClient:
             message: 用户消息
             system_prompt: 系统提示词（可选）
             max_tokens: 最大 token 数（可选）
+            tools: Tool 定义列表（可选，用于 function calling）
             
         Returns:
             AI 回复内容
@@ -91,18 +93,74 @@ class WukongClient:
         system = system_prompt or self.config.system_prompt
         max_tokens = max_tokens or self.config.max_tokens
         
+        # 构建消息
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": message}
+        ]
+        
         # 构建请求
         payload = {
             "model": self.config.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": message}
-            ],
+            "messages": messages,
             "max_tokens": max_tokens,
             "temperature": self.config.temperature,
             "stream": self.config.stream,
         }
         
+        # 添加 tools（如果有）
+        if tools:
+            payload["tools"] = tools
+        
+        return await self._do_request(payload)
+    
+    async def send_message_with_tools(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        max_tokens: Optional[int] = None,
+    ) -> str:
+        """
+        发送消息列表并获取回复（支持 Tool Call）
+        
+        Args:
+            messages: 消息列表（包含历史消息）
+            tools: Tool 定义列表（可选）
+            max_tokens: 最大 token 数（可选）
+            
+        Returns:
+            AI 回复内容（可能包含 tool_calls）
+        """
+        if not self._session:
+            await self.initialize()
+        
+        max_tokens = max_tokens or self.config.max_tokens
+        
+        # 构建请求
+        payload = {
+            "model": self.config.model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": self.config.temperature,
+            "stream": self.config.stream,
+        }
+        
+        # 添加 tools（如果有）
+        if tools:
+            payload["tools"] = tools
+        
+        return await self._do_request(payload)
+    
+    async def _do_request(self, payload: Dict[str, Any]) -> str:
+        """
+        执行 API 请求
+        
+        Args:
+            payload: 请求 payload
+            
+        Returns:
+            AI 回复内容
+        """
         try:
             url = f"{self.config.base_url}/chat/completions"
             
@@ -147,7 +205,17 @@ class WukongClient:
                         raise RuntimeError(f"API error: {resp.status}")
                     
                     result = await resp.json()
-                    content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    message = result.get("choices", [{}])[0].get("message", {})
+                    
+                    # 检查是否有 tool_calls
+                    if message.get("tool_calls"):
+                        # 返回包含 tool_calls 的完整消息
+                        return json.dumps({
+                            "content": message.get("content", ""),
+                            "tool_calls": message.get("tool_calls")
+                        }, ensure_ascii=False)
+                    
+                    content = message.get("content", "")
                     
                     if self._message_callback:
                         self._message_callback(content)

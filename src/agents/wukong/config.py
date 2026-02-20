@@ -13,9 +13,14 @@ from dataclasses import dataclass, field
 class WukongConfig:
     """悟空 Agent 配置"""
     
-    # API 配置 - 支持 MiniMax
+    # API 配置 - MiniMax
+    # 使用 api.minimax.chat/v1 (之前工作正常的地址)
     api_key: str = field(default_factory=lambda: os.getenv("MINIMAX_API_KEY", ""))
     base_url: str = field(default_factory=lambda: os.getenv("MINIMAX_BASE_URL", "https://api.minimax.chat/v1"))
+    
+    # Skill 配置
+    skill_enabled: bool = field(default_factory=lambda: os.getenv("SKILL_ENABLED", "true").lower() == "true")
+    skill_dir: str = field(default_factory=lambda: os.getenv("SKILL_DIR", ""))
     
     # 天枢/太白配置
     tianshu_url: str = field(default_factory=lambda: os.getenv("TIANSHU_URL", "http://localhost:8082"))
@@ -42,8 +47,9 @@ class WukongConfig:
     
     # 系统提示词
     system_prompt: str = """你是悟空，一个强大的 AI 智能体助手。
-你可以通过各种工具来完成复杂任务。
-请始终遵循用户的指示，并尽可能提供帮助。"""
+当你需要完成特定任务时，系统会提供相关的技能文档（SKILL）供你参考。
+请仔细阅读 SKILL 内容，按照指引直接执行任务，无需使用特定的函数调用格式。
+如果技能文档提供了具体的命令或步骤，请直接执行。"""
     
     # 流式输出
     stream: bool = True

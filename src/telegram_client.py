@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_API_URL = "https://api.telegram.org"
 
+# 獬豸审批 API 地址
+XIEZHI_API_BASE = os.getenv("XIEZHI_API_BASE", os.getenv("DITING_CHAIN_URL", "http://diting:8080/chain").replace("/chain", ""))
+
 
 @dataclass
 class TelegramMessage:
@@ -166,6 +169,9 @@ class TelegramClient:
         self._polling_task: Optional[asyncio.Task] = None
         self._offset = 0
         
+        # 审批回调
+        self._approval_callback: Optional[Callable[[str, str, bool], Awaitable[Any]]] = None
+        
         # 默认请求超时
         self._timeout = aiohttp.ClientTimeout(total=30)
 
@@ -178,6 +184,93 @@ class TelegramClient:
         """装饰器：注册回调处理器"""
         self._callback_handlers.append(func)
         return func
+
+    def set_approval_callback(
+        self,
+        callback: Callable[[str, str, bool], Awaitable[Any]]
+    ):
+        """
+        设置审批回调函数
+        
+        Args:
+            callback: 回调函数，签名: async def callback(query_id: str, request_id: str, approved: bool)
+        """
+        self._approval_callback = callback
+
+    async def _call_xiezhi_approval_api(
+        self,
+        request_id: str,
+        approved: bool,
+    ) -> bool:
+        """
+        调用獬豸审批 API
+        
+        Args:
+            request_id: 审批请求 ID (cheq_id)
+            approved: 是否批准
+            
+        Returns:
+            是否成功
+        """
+        url = f"{XIEZHI_API_BASE}/cheq/approve?id={request_id}&approved={'true' if approved else 'false'}"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status == 200:
+                        logger.info("獬豸审批 API 调用成功: request_id=%s, approved=%s", request_id, approved)
+                        return True
+                    else:
+                        logger.error("獬豸审批 API 调用失败: status=%s", resp.status)
+                        return False
+        except Exception as e:
+            logger.exception("调用獬豸审批 API 异常: %s", e)
+            return False
+
+    async def _handle_approval_callback(
+        self,
+        query_id: str,
+        callback_data: str,
+    ) -> str:
+        """
+        处理审批回调（批准/拒绝按钮）
+        
+        Args:
+            query_id: 回调查询 ID
+            callback_data: 回调数据，格式: "approve:request_id" 或 "reject:request_id"
+            
+        Returns:
+            显示给用户的反馈文本
+        """
+        try:
+            parts = callback_data.split(":", 1)
+            if len(parts) != 2:
+                return "无效的回调数据"
+            
+            action, request_id = parts[0], parts[1]
+            
+            if action not in ("approve", "reject"):
+                return "未知的操作类型"
+            
+            approved = (action == "approve")
+            
+            # 调用獬豸审批 API
+            api_success = await self._call_xiezhi_approval_api(request_id, approved)
+            
+            # 如果有自定义回调，也调用它
+            if self._approval_callback:
+                try:
+                    await self._approval_callback(query_id, request_id, approved)
+                except Exception as e:
+                    logger.exception("审批回调函数执行异常: %s", e)
+            
+            if api_success:
+                return "✅ 已批准" if approved else "❌ 已拒绝"
+            else:
+                return "⚠️ 审批处理失败，请稍后重试"
+                
+        except Exception as e:
+            logger.exception("处理审批回调异常: %s", e)
+            return "⚠️ 处理异常"
 
     async def _request(
         self, 
@@ -380,11 +473,20 @@ class TelegramClient:
         
         # 处理回调查询
         if update.callback_query:
-            for handler in self._callback_handlers:
-                try:
-                    await handler(update)
-                except Exception as e:
-                    logger.exception("回调处理器异常: %s", e)
+            callback = update.callback_query
+            callback_data = callback.data
+            
+            # 自动处理审批回调（approve:xxx 或 reject:xxx）
+            if callback_data and (callback_data.startswith("approve:") or callback_data.startswith("reject:")):
+                feedback = await self._handle_approval_callback(callback.id, callback_data)
+                await self.answer_callback_query(callback.id, feedback, show_alert=False)
+            else:
+                # 处理其他回调
+                for handler in self._callback_handlers:
+                    try:
+                        await handler(update)
+                    except Exception as e:
+                        logger.exception("回调处理器异常: %s", e)
 
     # ==================== Long Polling ====================
     
@@ -456,16 +558,26 @@ class TelegramClient:
         
         logger.info("Long Polling 已停止")
 
-    async def start_polling(self, allowed_updates: Optional[List[str]] = None):
+    async def start_polling(
+        self,
+        callback: Optional[Callable[[str, str, bool], Awaitable[Any]]] = None,
+        allowed_updates: Optional[List[str]] = None,
+    ):
         """
         启动 Long Polling
         
         Args:
+            callback: 审批回调函数，签名: async def callback(query_id, request_id, approved)
+                     当用户点击批准/拒绝按钮时调用
             allowed_updates: 要接收的更新类型
         """
         if self._polling:
             logger.warning("Polling 已在运行中")
             return
+        
+        # 设置审批回调
+        if callback:
+            self.set_approval_callback(callback)
         
         self._polling = True
         self._polling_task = asyncio.create_task(self._polling_loop())

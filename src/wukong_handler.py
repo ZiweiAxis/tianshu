@@ -114,6 +114,9 @@ class WukongBot:
             user_id = message.user_id
             username = message.username or message.first_name or "Unknown"
             
+            # 发送 typing 状态
+            await self.client.send_chat_action(chat_id, "typing")
+            
             # 获取文本内容（支持文本和图片 caption）
             text = message.text or message.caption or ""
             

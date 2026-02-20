@@ -5,6 +5,7 @@
 import asyncio
 import json
 import logging
+import re
 from typing import Optional, Callable, AsyncIterator, Dict, Any, List
 from dataclasses import dataclass
 import aiohttp
@@ -56,6 +57,15 @@ class WukongClient:
     def set_message_callback(self, callback: Callable[[str], None]) -> None:
         """设置消息回调函数"""
         self._message_callback = callback
+        
+    def _clean_think_tags(self, text: str) -> str:
+        """过滤思考标签内容"""
+        if not text:
+            return ""
+        # 移除 think 块 (支持中文和英文标签)
+        text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+        text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+        return text.strip()
         
     async def send_message(
         self, 
@@ -127,7 +137,7 @@ class WukongClient:
                         except json.JSONDecodeError:
                             continue
                     
-                    return full_content
+                    return self._clean_think_tags(full_content)
             else:
                 # 非流式响应
                 async with self._session.post(url, json=payload) as resp:
@@ -142,7 +152,7 @@ class WukongClient:
                     if self._message_callback:
                         self._message_callback(content)
                     
-                    return content
+                    return self._clean_think_tags(content)
                     
         except aiohttp.ClientError as e:
             logger.error(f"Network error: {e}")

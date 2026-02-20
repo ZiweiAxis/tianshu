@@ -862,6 +862,29 @@ class TelegramClient:
             return result["result"]["message_id"]
         return None
 
+    async def send_chat_action(
+        self,
+        chat_id: Union[int, str],
+        action: str = "typing",
+    ) -> bool:
+        """
+        发送聊天动作（显示 typing 状态等）
+        
+        Args:
+            chat_id: 聊天 ID
+            action: 动作类型 (typing, upload_photo, record_video, upload_voice, 
+                    upload_document, find_location, record_video_note, upload_video_note)
+            
+        Returns:
+            是否成功
+        """
+        data: Dict[str, Any] = {
+            "chat_id": str(chat_id),
+            "action": action,
+        }
+        result = await self._request("sendChatAction", data)
+        return result.get("ok", False)
+
     # ==================== 消息操作 ====================
 
     async def answer_callback_query(

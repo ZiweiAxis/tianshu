@@ -39,6 +39,10 @@ FEEDBACK_NO_REPLY = os.getenv("FEEDBACK_NO_REPLY", "已触达，等待处理。�
 HEALTH_PORT = int(os.getenv("HEALTH_PORT", "8080"))
 
 # ---------- Telegram ----------
+# 獬豸审批 Bot
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_APPROVAL_BOT_TOKEN = os.getenv("TELEGRAM_APPROVAL_BOT_TOKEN")
+# 悟空 Bot
+TELEGRAM_WUKONG_BOT_TOKEN = os.getenv("TELEGRAM_WUKONG_BOT_TOKEN")
 TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET")
 TELEGRAM_WEBHOOK_URL = os.getenv("TELEGRAM_WEBHOOK_URL")

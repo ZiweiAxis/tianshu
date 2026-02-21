@@ -31,20 +31,6 @@ def init_system_owners():
     else:
         print(f"ℹ️ 管理员已存在: {admin_id}")
     
-    # 预注册谛听 Owner
-    diting_id = "diting"
-    if not store.get("owners", diting_id):
-        store.set("owners", diting_id, {
-            "owner_id": diting_id,
-            "identities": {"system": {"type": "diting", "name": "Diting Policy Engine"}},
-            "channels": [],
-            "created_at": "2026-02-21T00:00:00Z"
-        })
-        store.set("owners_index", "system:diting", {"owner_id": diting_id})
-        print(f"✅ 已预注册谛听 Owner: {diting_id}")
-    else:
-        print(f"ℹ️ 谛听 Owner 已存在: {diting_id}")
-    
     return True
 
 

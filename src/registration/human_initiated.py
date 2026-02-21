@@ -3,7 +3,7 @@
 
 from typing import Any, Dict, Optional
 
-from src.identity import (
+from identity import (
     allocate_agent_id,
     bind_agent_owner,
     lookup_owners,
@@ -33,7 +33,7 @@ def register_agent_by_human(
     else:
         owner_id = owners[0]["owner_id"]
     # 2) Agent 标识全局唯一
-    from src.identity.agents import display_id_taken
+    from identity.agents import display_id_taken
 
     if agent_display_id and display_id_taken(agent_display_id):
         return {"ok": False, "error": f"Agent 标识已存在: {agent_display_id}"}
@@ -53,8 +53,8 @@ def register_agent_by_human(
 def _notify_diting_init_permission(agent_id: str, owner_id: str) -> None:
     """E4-S4：注册完成后通知谛听初始化权限；I-018：并调用谛听链上 DID 注册。"""
     import asyncio
-    from src.diting_client.init_permission import notify_agent_registered
-    from src.diting_client.chain_did import register_did_on_chain
+    from registration.diting.notify import notify_agent_registered
+    from registration.diting.chain_did import register_did_on_chain
 
     async def _notify_and_chain() -> None:
         await notify_agent_registered(agent_id, owner_id)

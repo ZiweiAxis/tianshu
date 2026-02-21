@@ -52,8 +52,8 @@ async def agents_register_handler(request: aiohttp.web.Request) -> aiohttp.web.R
         return aiohttp.web.json_response({"ok": False, "error": "缺少 owner_id"}, status=400)
     agent_display_id = (body.get("agent_display_id") or "").strip() or None
     from registration.human_initiated import register_agent_by_human
-    from diting_client.init_permission import notify_agent_registered
-    from diting_client.chain_did import register_did_on_chain
+    from registration.diting.notify import notify_agent_registered
+    from registration.diting.chain_did import register_did_on_chain
 
     out = register_agent_by_human("api", owner_id, agent_display_id, ensure_owner_registered=True, notify_diting=False)
     if not out.get("ok"):

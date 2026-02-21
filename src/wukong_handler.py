@@ -34,7 +34,7 @@ from agents.wukong.agent import WukongAgent
 from agents.wukong.config import WukongConfig
 
 # 导入身份服务 (S035: owner_id 路由)
-from src.identity.owners import get_or_create_telegram_owner
+from identity.owners import get_or_create_telegram_owner
 
 
 class WukongBot:

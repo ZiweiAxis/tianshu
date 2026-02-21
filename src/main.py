@@ -8,10 +8,10 @@ import os
 
 import aiohttp.web
 
-from src.bridge.feishu import FeishuBridge, make_matrix_sync_callback
-from src.core import room_manager, translator
-from src.config import HEALTH_PORT
-from src.matrix.client import MatrixClient
+from bridge.feishu import FeishuBridge, make_matrix_sync_callback
+from core import room_manager, translator
+from config import HEALTH_PORT
+from matrix.client import MatrixClient
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -37,7 +37,7 @@ async def ready(_request: aiohttp.web.Request) -> aiohttp.web.Response:
 
 async def discovery_handler(_request: aiohttp.web.Request) -> aiohttp.web.Response:
     """Agent 发现：GET /.well-known/tianshu-matrix 或 /api/v1/discovery，返回 matrix_homeserver 与可选 api_base。"""
-    from src.discovery import get_discovery_payload
+    from discovery import get_discovery_payload
     return aiohttp.web.json_response(get_discovery_payload())
 
 
@@ -51,9 +51,9 @@ async def agents_register_handler(request: aiohttp.web.Request) -> aiohttp.web.R
     if not owner_id:
         return aiohttp.web.json_response({"ok": False, "error": "缺少 owner_id"}, status=400)
     agent_display_id = (body.get("agent_display_id") or "").strip() or None
-    from src.registration.human_initiated import register_agent_by_human
-    from src.diting_client.init_permission import notify_agent_registered
-    from src.diting_client.chain_did import register_did_on_chain
+    from registration.human_initiated import register_agent_by_human
+    from diting_client.init_permission import notify_agent_registered
+    from diting_client.chain_did import register_did_on_chain
 
     out = register_agent_by_human("api", owner_id, agent_display_id, ensure_owner_registered=True, notify_diting=False)
     if not out.get("ok"):
@@ -82,7 +82,7 @@ async def agents_heartbeat_handler(request: aiohttp.web.Request) -> aiohttp.web.
     if not agent_id:
         return aiohttp.web.json_response({"ok": False, "error": "缺少 agent_id"}, status=400)
     status = (body.get("status") or "").strip() or None
-    from src.identity.agent_presence import agent_heartbeat as do_heartbeat
+    from identity.agent_presence import agent_heartbeat as do_heartbeat
 
     out = do_heartbeat(agent_id, status)
     if not out.get("ok"):
@@ -107,7 +107,7 @@ async def approval_request_handler(request: aiohttp.web.Request) -> aiohttp.web.
     
     注意：此接口现在发送 Matrix MSC1767 原生卡片（m.card），支持交互按钮。
     """
-    from src.config import APPROVAL_USER_ID, DITING_MATRIX_TOKEN, MATRIX_HOMESERVER
+    from config import APPROVAL_USER_ID, DITING_MATRIX_TOKEN, MATRIX_HOMESERVER, TELEGRAM_APPROVAL_BOT_TOKEN
     
     try:
         body = await request.json()
@@ -116,19 +116,41 @@ async def approval_request_handler(request: aiohttp.web.Request) -> aiohttp.web.
     
     target = body.get("target", {})
     payload = body.get("payload", {})
+    channel = target.get("channel", "matrix")
     
     if not payload:
         return aiohttp.web.json_response({"ok": False, "error": "缺少 payload"}, status=400)
     
-    # 获取审批目标用户 ID（默认为配置中的 APPROVAL_USER_ID）
-    approval_user_id = body.get("user_id") or APPROVAL_USER_ID
-    if not approval_user_id:
-        return aiohttp.web.json_response({"ok": False, "error": "未配置 APPROVAL_USER_ID"}, status=500)
-    
-    # 使用 DITING_MATRIX_TOKEN 发送审批请求（DM 复用）
-    access_token = body.get("access_token") or DITING_MATRIX_TOKEN
-    if not access_token:
-        return aiohttp.web.json_response({"ok": False, "error": "未配置 DITING_MATRIX_TOKEN"}, status=500)
+    # Telegram 渠道投递
+    if channel == "telegram":
+        from telegram.provider import TelegramProvider
+        
+        telegram_token = target.get("token") or TELEGRAM_APPROVAL_BOT_TOKEN
+        if not telegram_token:
+            return aiohttp.web.json_response({"ok": False, "error": "未配置 TELEGRAM_APPROVAL_BOT_TOKEN"}, status=500)
+        
+        telegram_chat_id = target.get("receive_id")
+        if not telegram_chat_id:
+            return aiohttp.web.json_response({"ok": False, "error": "telegram 投递需要 receive_id"}, status=400)
+        
+        provider = TelegramProvider(telegram_token)
+        
+        title = payload.get("title", "审批请求")
+        description = payload.get("description", payload.get("content", ""))
+        cheq_id = payload.get("request_id") or payload.get("cheq_id", "")
+        
+        message = f"🔔 *{title}*\n\n{description}\n\n🆔 ID: `{cheq_id}`\n\n请回复 '批准' 或 '拒绝'"
+        
+        message_id = await provider.deliver(
+            chat_id=telegram_chat_id,
+            message=message,
+            semantic_type="approval_request",
+        )
+        
+        if message_id:
+            return aiohttp.web.json_response({"ok": True, "message_id": message_id, "channel": "telegram"})
+        else:
+            return aiohttp.web.json_response({"ok": False, "error": "Telegram 投递失败"}, status=500)
     
     # 获取 Matrix 客户端实例
     matrix = MatrixClient()
@@ -164,12 +186,12 @@ async def approval_request_handler(request: aiohttp.web.Request) -> aiohttp.web.
         
         if event_id:
             # 记录审批消息用于「回复即批准」
-            from src.core.approval_reply import record_approval_message
+            from core.approval_reply import record_approval_message
             gateway_base_url = MATRIX_HOMESERVER
             request_id = payload.get("request_id", "")
             # 需要获取 room_id，从映射文件中获取
             import json
-            from src.config import DM_MAPPING_FILE
+            from config import DM_MAPPING_FILE
             room_id = None
             try:
                 if os.path.exists(DM_MAPPING_FILE):
@@ -195,8 +217,8 @@ async def approval_request_handler(request: aiohttp.web.Request) -> aiohttp.web.
 
 async def run_health_server(port: int) -> aiohttp.web.AppRunner:
     """在后台提供 /health、/ready 与 Agent 发现端点。"""
-    from src.bridge.telegram import TelegramBridge
-    from src.config import TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET
+    from bridge.telegram import TelegramBridge
+    from config import TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET
     
     app = aiohttp.web.Application()
     app.router.add_get("/health", health)
@@ -209,10 +231,10 @@ async def run_health_server(port: int) -> aiohttp.web.AppRunner:
     
     # Telegram Webhook 端点（使用 telegram_webhook 模块）
     if TELEGRAM_BOT_TOKEN:
-        from src.telegram_webhook import setup_webhook_in_app, create_bridge_handler
+        from telegram_webhook import setup_webhook_in_app, create_bridge_handler
         
         async def _bridge_handler(data):
-            from src.bridge.telegram import handle_telegram_event
+            from bridge.telegram import handle_telegram_event
             matrix = MatrixClient()
             if await matrix.connect():
                 try:
@@ -238,12 +260,13 @@ async def run_health_server(port: int) -> aiohttp.web.AppRunner:
 
 async def run_bridge():
     """连接 Matrix，启动 sync 循环，将 Matrix 事件转发到飞书和 Telegram。"""
-    from src.bridge.feishu import FeishuBridge, make_matrix_sync_callback
-    from src.bridge.telegram import TelegramBridge
+    from config import TELEGRAM_WUKONG_BOT_TOKEN
+    from bridge.feishu import FeishuBridge, make_matrix_sync_callback
+    from bridge.telegram import TelegramBridge
     
     matrix = MatrixClient()
     feishu = FeishuBridge()
-    telegram = TelegramBridge()
+    telegram = TelegramBridge(token=TELEGRAM_WUKONG_BOT_TOKEN)
     
     if not feishu.is_configured:
         logger.warning("飞书未配置，Matrix -> 飞书 将不可用")
@@ -251,14 +274,15 @@ async def run_bridge():
         logger.warning("Telegram 未配置，Matrix -> Telegram 将不可用")
     
     on_event = make_matrix_sync_callback(feishu, room_manager, translator, telegram_bridge=telegram)
-    if not await matrix.connect():
-        logger.error("Matrix 连接失败，退出")
-        return
-    set_matrix_ready(True)
-    matrix.start_sync_loop(on_event)
+    matrix_connected = await matrix.connect()
+    if not matrix_connected:
+        logger.warning("Matrix 连接失败，将以只读模式运行（仅支持 Telegram 投递）")
+    else:
+        set_matrix_ready(True)
+        matrix.start_sync_loop(on_event)
     
     # 启动 @diting 审批监听器（监听审批回复）
-    from src.diting_listener import start_diting_listener
+    from diting_listener import start_diting_listener
     if not await start_diting_listener():
         logger.warning("DitingApprovalListener 启动失败，审批回复功能将不可用")
     
@@ -268,14 +292,14 @@ async def run_bridge():
         pass
     finally:
         set_matrix_ready(False)
-        from src.diting_listener import stop_diting_listener
+        from diting_listener import stop_diting_listener
         await stop_diting_listener()
     await matrix.disconnect()
 
 
 async def main():
     """先启动健康探针，再跑桥接（桥接阻塞直到退出）。"""
-    from src.gateway_bootstrap import bootstrap_gateway_token
+    from gateway_bootstrap import bootstrap_gateway_token
     if not bootstrap_gateway_token():
         logger.warning("网关 token 未配置且自举失败，Matrix 连接可能失败")
     runner = await run_health_server(HEALTH_PORT)

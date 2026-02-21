@@ -2,6 +2,7 @@
 # Telegram 事件经 Webhook 进入 -> 转 Matrix Event；Matrix Event -> Telegram 发消息 API
 
 import logging
+import os
 from typing import Any, Dict, Optional
 
 from channel.telegram.client import TelegramClient
@@ -123,9 +124,39 @@ async def handle_telegram_callback(
 
     # 获取 Telegram provider 回答回调
     from config import TELEGRAM_BOT_TOKEN
+    provider = None
     if TELEGRAM_BOT_TOKEN:
         provider = TelegramProvider(TELEGRAM_BOT_TOKEN)
-        await provider.answer_callback(query_id, text="处理中...")
+    
+    # 检查是否是审批回调 (approve:xxx 或 reject:xxx)
+    feedback = "处理中..."
+    if data and ":" in data:
+        parts = data.split(":", 1)
+        action, request_id = parts[0], parts[1]
+        
+        if action in ("approve", "reject"):
+            approved = (action == "approve")
+            
+            # 调用獬豸 API 更新 CHEQ 状态
+            xiezhi_base = os.getenv("XIEZHI_API_BASE", os.getenv("DITING_CHAIN_URL", "http://localhost:8081/chain").replace("/chain", ""))
+            url = f"{xiezhi_base}/cheq/approve?id={request_id}&approved={'true' if approved else 'false'}"
+            
+            import aiohttp
+            try:
+                async with aiohttp.ClientSession(trust_env=True) as session:
+                    async with session.post(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                        if resp.status == 200:
+                            logger.info("审批回调成功: request_id=%s, approved=%s", request_id, approved)
+                            feedback = "✅ 已批准" if approved else "❌ 已拒绝"
+                        else:
+                            logger.error("审批回调失败: status=%s", resp.status)
+                            feedback = "⚠️ 审批处理失败"
+            except Exception as e:
+                logger.exception("审批回调异常: %s", e)
+                feedback = "⚠️ 审批处理异常"
+    
+    if provider:
+        await provider.answer_callback(query_id, text=feedback)
 
     # 可以在这里将回调转发给业务逻辑或直接更新 Matrix 消息
     logger.info("Telegram callback: query_id=%s data=%s", query_id, data)

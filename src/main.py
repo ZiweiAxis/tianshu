@@ -12,6 +12,7 @@ from bridge.feishu import FeishuBridge, make_matrix_sync_callback
 from core import room_manager, translator
 from config import HEALTH_PORT
 from matrix.client import MatrixClient
+from api.owners import owners_register_handler
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -94,18 +95,26 @@ async def approval_request_handler(request: aiohttp.web.Request) -> aiohttp.web.
     """
     POST /api/v1/delivery/approval-request：投递审批请求
     body: {
-        "target": {"channel": "feishu", "receive_id": "oc_xxx", "receive_id_type": "chat_id"},
+        "target": {
+            "channel": "telegram",  // 或 "matrix"
+            "receive_id": "123456789",  // Telegram user_id，可选
+            "owner_id": "owner-xxx",    // 所有者 ID，可选（用于自动查找 Telegram receive_id）
+            "receive_id_type": "user_id"
+        },
         "payload": {
             "title": "审批标题",
             "description": "审批描述",
             "source_agent_id": "agent_xxx",
             "request_id": "req_xxx",
+            "cheq_id": "cheq_xxx",  // CHEQ ID
             "callback_url": "http://xxx/callback"
         }
     }
-    返回: {"ok": true, "event_id": "xxx", "room_id": "xxx"}
+    返回: {"ok": true, "message_id": "xxx", "channel": "telegram"}
     
-    注意：此接口现在发送 Matrix MSC1767 原生卡片（m.card），支持交互按钮。
+    注意：
+    - Telegram 渠道支持通过 owner_id 自动查找用户的 Telegram receive_id
+    - 审批消息会带批准/拒绝按钮，用户点击后会自动更新 CHEQ 状态
     """
     from config import APPROVAL_USER_ID, DITING_MATRIX_TOKEN, MATRIX_HOMESERVER, TELEGRAM_APPROVAL_BOT_TOKEN
     
@@ -123,32 +132,69 @@ async def approval_request_handler(request: aiohttp.web.Request) -> aiohttp.web.
     
     # Telegram 渠道投递
     if channel == "telegram":
-        from telegram.provider import TelegramProvider
+        from channel.telegram.provider import TelegramProvider
         
         telegram_token = target.get("token") or TELEGRAM_APPROVAL_BOT_TOKEN
         if not telegram_token:
             return aiohttp.web.json_response({"ok": False, "error": "未配置 TELEGRAM_APPROVAL_BOT_TOKEN"}, status=500)
         
         telegram_chat_id = target.get("receive_id")
+        owner_id = target.get("owner_id")
+        
+        # 如果没有 receive_id，尝试从 owner_id 查找 Telegram receive_id
+        if not telegram_chat_id and owner_id:
+            from identity.owners import get_enabled_channel, get_owner
+            owner = get_owner(owner_id)
+            if not owner:
+                return aiohttp.web.json_response({"ok": False, "error": f"owner_id={owner_id} 不存在"}, status=400)
+            
+            # 查找 Telegram 渠道
+            channel_info = get_enabled_channel(owner_id)
+            if channel_info and channel_info.get("type") == "telegram":
+                telegram_chat_id = channel_info.get("receive_id")
+                logger.info(f"从 owner_id={owner_id} 找到 Telegram receive_id: {telegram_chat_id}")
+            else:
+                # 遍历所有渠道找 Telegram
+                from identity.owners import get_channels
+                all_channels = get_channels(owner_id)
+                for ch in all_channels:
+                    if ch.get("type") == "telegram" and ch.get("enabled", True):
+                        telegram_chat_id = ch.get("receive_id")
+                        logger.info(f"从 owner_id={owner_id} 渠道列表找到 Telegram receive_id: {telegram_chat_id}")
+                        break
+        
         if not telegram_chat_id:
-            return aiohttp.web.json_response({"ok": False, "error": "telegram 投递需要 receive_id"}, status=400)
+            if owner_id:
+                return aiohttp.web.json_response({"ok": False, "error": f"owner_id={owner_id} 未绑定 Telegram 渠道"}, status=400)
+            else:
+                return aiohttp.web.json_response({"ok": False, "error": "telegram 投递需要 receive_id 或 owner_id"}, status=400)
         
         provider = TelegramProvider(telegram_token)
         
         title = payload.get("title", "审批请求")
         description = payload.get("description", payload.get("content", ""))
         cheq_id = payload.get("request_id") or payload.get("cheq_id", "")
+        request_id = payload.get("request_id", "")
         
-        message = f"🔔 *{title}*\n\n{description}\n\n🆔 ID: `{cheq_id}`\n\n请回复 '批准' 或 '拒绝'"
+        # 构建带按钮的审批消息
+        buttons = [
+            [
+                {"text": "✅ 批准", "callback_data": f"approve:{request_id}"},
+                {"text": "❌ 拒绝", "callback_data": f"reject:{request_id}"},
+            ]
+        ]
+        
+        message = f"🔔 *{title}*\n\n{description}\n\n🆔 ID: `{cheq_id}`"
         
         message_id = await provider.deliver(
             chat_id=telegram_chat_id,
             message=message,
             semantic_type="approval_request",
+            buttons=buttons,
         )
         
         if message_id:
-            return aiohttp.web.json_response({"ok": True, "message_id": message_id, "channel": "telegram"})
+            return aiohttp.web.json_response({"ok": True, "message_id": message_id, "channel": "telegram", "chat_id": telegram_chat_id})
         else:
             return aiohttp.web.json_response({"ok": False, "error": "Telegram 投递失败"}, status=500)
     
@@ -227,6 +273,7 @@ async def run_health_server(port: int) -> aiohttp.web.AppRunner:
     app.router.add_get("/api/v1/discovery", discovery_handler)
     app.router.add_post("/api/v1/agents/register", agents_register_handler)
     app.router.add_post("/api/v1/agents/heartbeat", agents_heartbeat_handler)
+    app.router.add_post("/api/v1/owners/register", owners_register_handler)
     app.router.add_post("/api/v1/delivery/approval-request", approval_request_handler)
     
     # Telegram Webhook 端点（使用 telegram_webhook 模块）

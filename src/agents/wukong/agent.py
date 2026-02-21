@@ -52,6 +52,7 @@ class WukongAgent:
         message_callback: Optional[Callable[[str], None]] = None,
         skill_loader: Optional[SkillLoader] = None,
         enable_skills: bool = True,
+        owner_id: Optional[str] = None,
     ):
         """
         初始化悟空 Agent
@@ -61,11 +62,13 @@ class WukongAgent:
             message_callback: 消息回调函数（接收消息内容）
             skill_loader: SkillLoader 实例
             enable_skills: 是否启用 Skill 功能
+            owner_id: 所有者 ID（用于审批映射）
         """
         self.config = config or WukongConfig()
         self._client = WukongClient(self.config)
         self._state = AgentState.IDLE
         self._message_callback = message_callback
+        self._owner_id = owner_id
         self._conversation_history: List[ConversationMessage] = []
 
         # Skill 加载器
@@ -165,6 +168,14 @@ class WukongAgent:
     ) -> str:
         """
         发送消息
+        """
+        # 设置 owner_id（如果之前未设置）
+        # owner_id 应该在 Agent 创建时或每次请求时设置
+        
+    def set_owner_id(self, owner_id: str) -> None:
+        """设置所有者 ID，用于审批映射"""
+        self._owner_id = owner_id
+        logger.info(f"Owner ID set: {owner_id}")
         
         Args:
             message: 用户消息
@@ -484,6 +495,43 @@ class WukongAgent:
                 "success": False,
                 "message": f"Unknown tool: {tool_name}"
             }
+
+        # 谛听检查 (PEP - Policy Enforcement Point)
+        diting_url = os.getenv("DITING_URL", "http://localhost:8080")
+        
+        # 构建请求 payload，包含 owner_id 用于审批映射
+        request_payload = {
+            "action": f"exec:skill:{skill_name}",
+            "resource": arguments.get("city", "unknown")
+        }
+        if self._owner_id:
+            request_payload["owner_id"] = self._owner_id
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{diting_url}/auth/exec",
+                    json=request_payload,
+                    timeout=aiohttp.ClientTimeout(total=5)
+                ) as resp:
+                    if resp.status != 200:
+                        logger.warning(f"Diting check failed: status={resp.status}")
+                        return {"success": False, "message": f"策略检查失败: status={resp.status}"}
+                    
+                    decision = await resp.json()
+                    logger.info(f"Diting decision: {decision}")
+                    
+                    decision_type = decision.get("decision", "deny")
+                    
+                    if decision_type == "deny":
+                        return {"success": False, "message": f"操作被拒绝: {decision.get('reason')}"}
+                    
+                    if decision_type == "review":
+                        return {"success": False, "message": "操作需要审批，等待审批完成", "pending_approval": True, "cheq_id": decision.get("cheq_id", "")}
+        except Exception as e:
+            logger.error(f"Diting check error: {e}")
+            # 谛听不可用时拒绝执行
+            return {"success": False, "message": f"策略检查不可用: {str(e)}"}
 
         try:
             result = self._skill_loader.execute_skill(skill_name, arguments)

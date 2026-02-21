@@ -334,6 +334,10 @@ class WukongBot:
         logger.info(f"🤖 正在调用 Agent 处理...")
         
         try:
+            # 设置 owner_id（用于审批映射）
+            if owner_id:
+                self.agent.set_owner_id(owner_id)
+            
             # 调用 Agent
             response = await self.agent.send_message(text)
             
